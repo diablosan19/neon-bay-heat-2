@@ -1,190 +1,267 @@
 // NEON BAY HEAT 2 — painting the world.
-// Everything here works in world coordinates under the camera transform
-// the main loop sets up: sea and sand first, turf, the avenue grid,
-// buildings with their windows and neon, trees, then the actors.
+// Everything the camera sees, drawn in world space: sea and sand, turf
+// and block pavement, the avenue grid with its dashes and crosswalks,
+// buildings with lit windows and neon signs, palms, then the actors —
+// cars with proper bodies (a cruiser is a white car with a lightbar,
+// never a dot), pedestrians, and the pulsing goal ring for the job.
 
-import { WORLD_W, WORLD_H, PITCH, ROAD_W, BEACH_X, COL } from './config.js';
+import {
+  WORLD_W, WORLD_H, ROAD_W, BEACH_X, SEA_X, PALETTE,
+} from './config.js';
+import { V_ROADS, H_ROADS } from './city.js';
+import { hash2 } from './random.js';
+
+function inView(x, y, w, h, view) {
+  return x + w >= view.x && y + h >= view.y && x <= view.x + view.w && y <= view.y + view.h;
+}
 
 export function paintWorld(g, city, view, t) {
-  // Sea covers the whole view; land is drawn over it.
-  g.fillStyle = COL.sea;
+  // Sea first: it is the backdrop for the whole map and everything
+  // past the world's edges.
+  g.fillStyle = PALETTE.sea;
   g.fillRect(view.x, view.y, view.w, view.h);
-  g.fillStyle = 'rgba(255,255,255,0.055)';
-  for (let i = 0; i < 30; i++) {
-    const wx = BEACH_X + 190 + ((i * 167) % 260) + Math.sin(t * 0.6 + i * 1.7) * 16;
-    const wy = (i * 293) % WORLD_H;
-    if (wx > view.x - 50 && wx < view.x + view.w + 50 && wy > view.y && wy < view.y + view.h) {
-      g.fillRect(wx, wy, 40, 3);
-    }
-  }
-  // Landmass: turf, with a sand apron from BEACH_X to the world edge.
-  g.fillStyle = COL.lawn;
-  g.fillRect(0, 0, WORLD_W, WORLD_H);
-  g.fillStyle = COL.sand;
-  g.fillRect(BEACH_X, 0, WORLD_W - BEACH_X, WORLD_H);
-  g.fillStyle = COL.sandWet;
-  g.fillRect(BEACH_X, 0, 26, WORLD_H);
-  // Checker the turf lightly so open ground reads as ground.
-  g.fillStyle = COL.lawnAlt;
-  const step = PITCH;
-  for (let x = 0; x < BEACH_X; x += step) {
-    for (let y = 0; y < WORLD_H; y += step) {
-      if (((x / step) + (y / step)) % 2 === 0) g.fillRect(x, y, step, step);
+  g.fillStyle = PALETTE.seaSparkle;
+  const step = 90;
+  for (let gx = Math.floor(view.x / step) * step; gx < view.x + view.w; gx += step) {
+    for (let gy = Math.floor(view.y / step) * step; gy < view.y + view.h; gy += step) {
+      if (gx < SEA_X - 30 && gx >= 0 && gy >= 0 && gy < WORLD_H) continue;
+      if (hash2(gx / step, gy / step) < 0.55) continue;
+      const wob = Math.sin(t * 0.8 + gx * 0.05 + gy * 0.11) * 7;
+      g.fillRect(gx + 18 + wob, gy + 40, 34, 3);
     }
   }
 
-  // Avenues: edge, asphalt, kerbs, centre dashes.
-  const drawRoads = (lines, vertical) => {
-    for (const c of lines) {
-      const a = c - ROAD_W / 2, b = c + ROAD_W / 2;
-      g.fillStyle = COL.roadEdge;
-      if (vertical) g.fillRect(a - 4, 0, ROAD_W + 8, WORLD_H); else g.fillRect(0, a - 4, WORLD_W, ROAD_W + 8);
-      g.fillStyle = COL.road;
-      if (vertical) g.fillRect(a, 0, ROAD_W, WORLD_H); else g.fillRect(0, a, WORLD_W, ROAD_W);
-      g.fillStyle = COL.dash;
-      const lim = vertical ? WORLD_H : WORLD_W;
-      for (let d = 14; d < lim; d += 58) {
-        if (vertical) g.fillRect(c - 2, d, 4, 27); else g.fillRect(d, c - 2, 27, 4);
+  // Land and beach.
+  g.fillStyle = PALETTE.turf;
+  g.fillRect(0, 0, BEACH_X, WORLD_H);
+  g.fillStyle = PALETTE.sand;
+  g.fillRect(BEACH_X, 0, SEA_X - BEACH_X, WORLD_H);
+
+  // Block pavement slabs.
+  g.fillStyle = PALETTE.slab;
+  for (const c of city.cells) {
+    if (!inView(c.x, c.y, c.w, c.h, view)) continue;
+    g.fillRect(c.x - 4, c.y - 4, c.w + 8, c.h + 8);
+  }
+
+  // Avenues.
+  g.fillStyle = PALETTE.asphalt;
+  for (const x of V_ROADS) g.fillRect(x - ROAD_W / 2, 0, ROAD_W, WORLD_H);
+  for (const y of H_ROADS) g.fillRect(0, y - ROAD_W / 2, SEA_X + 46, ROAD_W);
+  // Kerb lines.
+  g.fillStyle = PALETTE.kerb;
+  for (const x of V_ROADS) {
+    g.fillRect(x - ROAD_W / 2 - 2, 0, 2, WORLD_H);
+    g.fillRect(x + ROAD_W / 2, 0, 2, WORLD_H);
+  }
+  for (const y of H_ROADS) {
+    g.fillRect(0, y - ROAD_W / 2 - 2, SEA_X + 46, 2);
+    g.fillRect(0, y + ROAD_W / 2, SEA_X + 46, 2);
+  }
+  // Centre dashes.
+  g.fillStyle = PALETTE.dash;
+  for (const x of V_ROADS) {
+    for (let y = 14; y < WORLD_H; y += 58) g.fillRect(x - 2, y, 4, 27);
+  }
+  for (const y of H_ROADS) {
+    for (let x = 14; x < SEA_X + 30; x += 58) g.fillRect(x, y - 2, 27, 4);
+  }
+  // Crosswalks at junctions.
+  g.fillStyle = 'rgba(232,236,240,0.5)';
+  for (const vx of V_ROADS) {
+    for (const hy of H_ROADS) {
+      if (!inView(vx - ROAD_W / 2, hy - ROAD_W / 2, ROAD_W, ROAD_W, view)) continue;
+      for (let sIdx = -2; sIdx <= 2; sIdx++) {
+        g.fillRect(vx + sIdx * 13 - 3, hy - ROAD_W / 2 - 9, 6, 7);
+        g.fillRect(vx + sIdx * 13 - 3, hy + ROAD_W / 2 + 2, 6, 7);
+        g.fillRect(vx - ROAD_W / 2 - 9, hy + sIdx * 13 - 3, 7, 6);
+        g.fillRect(vx + ROAD_W / 2 + 2, hy + sIdx * 13 - 3, 7, 6);
       }
     }
-  };
-  drawRoads(city.vRoads, true);
-  drawRoads(city.hRoads, false);
+  }
 
-  // Buildings, culled to the view.
+  // Buildings.
   for (const b of city.buildings) {
-    if (b.x + b.w < view.x - 40 || b.x > view.x + view.w + 40 || b.y + b.h < view.y - 40 || b.y > view.y + view.h + 40) continue;
+    if (!inView(b.x, b.y, b.w, b.h, view)) continue;
     g.fillStyle = 'rgba(0,0,0,0.28)';
-    g.fillRect(b.x + 6, b.y + 8, b.w, b.h);
+    g.fillRect(b.x + 5, b.y + 7, b.w, b.h);
     g.fillStyle = b.roof;
     g.fillRect(b.x, b.y, b.w, b.h);
-    g.fillStyle = 'rgba(255,255,255,0.12)';
-    g.fillRect(b.x, b.y, b.w, 5);
-    g.fillRect(b.x, b.y, 5, b.h);
-    // Window grid, some lit.
-    const cols = Math.max(2, Math.floor(b.w / 17));
-    const rows = Math.max(2, Math.floor(b.h / 17));
-    for (let i = 0; i < cols * rows; i++) {
-      if (!b.wins[i % b.wins.length]) continue;
-      g.fillStyle = 'rgba(255,216,130,0.8)';
-      g.fillRect(b.x + 7 + (i % cols) * 16, b.y + 8 + Math.floor(i / cols) * 16, 6, 8);
+    g.fillStyle = 'rgba(255,255,255,0.09)';
+    g.fillRect(b.x + 4, b.y + 4, b.w - 8, b.h - 8);
+    // Windows: a grid, some lit, pattern fixed at build time.
+    const cw = b.w / b.cols;
+    const ch = b.h / b.rows;
+    for (let i = 0; i < b.cols; i++) {
+      for (let j = 0; j < b.rows; j++) {
+        if (!b.lit[j * b.cols + i]) continue;
+        g.fillStyle = 'rgba(255,213,120,0.8)';
+        g.fillRect(b.x + i * cw + cw * 0.28, b.y + j * ch + ch * 0.28, cw * 0.42, ch * 0.42);
+      }
     }
     if (b.sign) {
       g.font = 'bold 11px system-ui, sans-serif';
       g.textAlign = 'center';
-      g.shadowColor = b.signCol;
-      g.shadowBlur = 10;
-      g.fillStyle = b.signCol;
+      g.shadowColor = b.signColor;
+      g.shadowBlur = 8;
+      g.fillStyle = b.signColor;
       g.fillText(b.sign, b.x + b.w / 2, b.y + b.h / 2 + 4);
       g.shadowBlur = 0;
     }
   }
 
-  // Trees and palms.
-  for (const tr of city.trees) {
-    if (tr.x < view.x - 40 || tr.x > view.x + view.w + 40 || tr.y < view.y - 40 || tr.y > view.y + view.h + 40) continue;
-    g.fillStyle = 'rgba(0,0,0,0.2)';
-    g.beginPath(); g.ellipse(tr.x + 4, tr.y + 6, tr.r, tr.r * 0.55, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = tr.palm ? '#3f9e58' : '#2e6b34';
-    g.beginPath(); g.arc(tr.x, tr.y, tr.r, 0, Math.PI * 2); g.fill();
-    g.fillStyle = 'rgba(255,255,255,0.13)';
-    g.beginPath(); g.arc(tr.x - tr.r * 0.3, tr.y - tr.r * 0.3, tr.r * 0.48, 0, Math.PI * 2); g.fill();
+  // Palms: a knotted trunk dot under a star of fronds.
+  for (const p of city.palms) {
+    if (!inView(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2, view)) continue;
+    g.strokeStyle = '#2c7a43';
+    g.lineWidth = 3.4;
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2 + p.x * 0.01;
+      g.beginPath();
+      g.moveTo(p.x, p.y);
+      g.quadraticCurveTo(
+        p.x + Math.cos(a) * p.r * 0.7, p.y + Math.sin(a) * p.r * 0.7 - 3,
+        p.x + Math.cos(a) * p.r, p.y + Math.sin(a) * p.r + 3,
+      );
+      g.stroke();
+    }
+    g.fillStyle = '#6b4a2f';
+    g.beginPath();
+    g.arc(p.x, p.y, 3.4, 0, Math.PI * 2);
+    g.fill();
   }
 }
 
-// Cars are drawn nose-east at heading 0, so w runs along the nose and
-// l across it. Cruisers get the white livery, a stripe and a lightbar
-// whose two lamps alternate with time.
 export function paintCar(g, car, t) {
   g.save();
   g.translate(car.x, car.y);
   g.rotate(car.heading);
-  const w = car.w, l = car.l;
+  const L = car.w; // along the heading
+  const W = car.l; // across it
   g.fillStyle = 'rgba(0,0,0,0.3)';
-  g.beginPath(); g.roundRect(-w / 2 + 3, -l / 2 + 4, w, l, 5); g.fill();
-  g.fillStyle = car.paint;
-  g.beginPath(); g.roundRect(-w / 2, -l / 2, w, l, 5); g.fill();
+  g.beginPath();
+  g.roundRect(-L / 2 + 3, -W / 2 + 4, L, W, 5);
+  g.fill();
+  g.fillStyle = car.color;
+  g.beginPath();
+  g.roundRect(-L / 2, -W / 2, L, W, 5);
+  g.fill();
   if (car.cop) {
-    g.fillStyle = COL.copStripe;
-    g.fillRect(-w * 0.3, -l / 2, w * 0.24, l);
-    g.fillRect(w * 0.14, -l / 2, w * 0.1, l);
+    // Black bonnet and boot bands mark the cruiser under its lightbar.
+    g.fillStyle = '#1d2735';
+    g.fillRect(L * 0.3, -W / 2, L * 0.2, W);
+    g.fillRect(-L / 2, -W / 2, L * 0.18, W);
+  }
+  if (car.type === 'van' || car.type === 'pickup') {
+    g.fillStyle = 'rgba(16,22,30,0.85)';
+    g.beginPath();
+    g.roundRect(L * 0.08, -W / 2 + 3, L * 0.2, W - 6, 3);
+    g.fill();
+    if (car.type === 'pickup') {
+      g.fillStyle = 'rgba(0,0,0,0.22)';
+      g.fillRect(-L / 2 + 3, -W / 2 + 3, L * 0.34, W - 6);
+    }
+  } else {
+    // Cabin and glass.
+    g.fillStyle = 'rgba(14,20,28,0.92)';
+    g.beginPath();
+    g.roundRect(-L * 0.2, -W * 0.36, L * 0.46, W * 0.72, 3);
+    g.fill();
+    g.fillStyle = 'rgba(178,220,255,0.45)';
+    g.fillRect(L * 0.3, -W * 0.32, L * 0.1, W * 0.64);
+  }
+  // Lights: pale at the nose, red at the tail.
+  g.fillStyle = '#fff3b0';
+  g.fillRect(L / 2 - 3, -W / 2 + 2.5, 3, 4.4);
+  g.fillRect(L / 2 - 3, W / 2 - 6.9, 3, 4.4);
+  g.fillStyle = '#ff4545';
+  g.fillRect(-L / 2, -W / 2 + 2.5, 3, 4.4);
+  g.fillRect(-L / 2, W / 2 - 6.9, 3, 4.4);
+  if (car.cop) {
+    const phase = Math.sin(t * 13) > 0;
+    g.fillStyle = phase ? '#ff3b30' : '#7a1610';
+    g.fillRect(-5, -W / 2 + 2, 10, 5);
+    g.fillStyle = phase ? '#1450c8' : '#2f7bff';
+    g.fillRect(-5, W / 2 - 7, 10, 5);
+    g.fillStyle = '#e8ecf2';
+    g.fillRect(-2.4, -3, 4.8, 6);
   }
   if (car.type === 'taxi') {
     g.fillStyle = '#14181f';
-    g.fillRect(-6, -4.5, 12, 9);
+    g.fillRect(-6, -4.4, 12, 8.8);
     g.fillStyle = '#ffd23f';
-    g.font = 'bold 7px system-ui';
+    g.font = 'bold 6.4px system-ui, sans-serif';
     g.textAlign = 'center';
-    g.fillText('TAXI', 0, 2.5);
-  }
-  // Cabin and glass.
-  g.fillStyle = 'rgba(13,18,26,0.92)';
-  g.beginPath(); g.roundRect(-w * 0.2, -l * 0.34, w * 0.42, l * 0.68, 3); g.fill();
-  g.fillStyle = 'rgba(175,215,250,0.45)';
-  g.fillRect(w * 0.24, -l * 0.3, w * 0.12, l * 0.6);
-  // Lights.
-  g.fillStyle = '#fff3b0';
-  g.fillRect(w / 2 - 3, -l / 2 + 2, 3, 4);
-  g.fillRect(w / 2 - 3, l / 2 - 6, 3, 4);
-  g.fillStyle = '#ff4545';
-  g.fillRect(-w / 2, -l / 2 + 2, 3, 4);
-  g.fillRect(-w / 2, l / 2 - 6, 3, 4);
-  if (car.cop) {
-    const phase = Math.sin(t * 13) > 0;
-    g.fillStyle = phase ? COL.lampR : '#7a1d1d';
-    g.beginPath(); g.arc(-3.5, 0, 4.6, 0, Math.PI * 2); g.fill();
-    g.fillStyle = phase ? '#1d3f7a' : COL.lampB;
-    g.beginPath(); g.arc(3.5, 0, 4.6, 0, Math.PI * 2); g.fill();
-    g.fillStyle = 'rgba(10,10,10,0.85)';
-    g.fillRect(-1, -l / 2, 2, l);
+    g.fillText('TAXI', 0, 2.4);
   }
   g.restore();
+
+  if (car.downT > 0) {
+    g.fillStyle = 'rgba(255,255,255,0.9)';
+    g.font = 'bold 13px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText('✕', car.x, car.y - 20);
+  }
 }
 
 export function paintPed(g, p) {
+  g.fillStyle = 'rgba(0,0,0,0.25)';
+  g.beginPath();
+  g.ellipse(p.x + 2, p.y + 4, 7.4, 3.6, 0, 0, Math.PI * 2);
+  g.fill();
   if (p.downT > 0) {
+    // Knocked down: a sprawled shape, briefly.
     g.save();
     g.translate(p.x, p.y);
-    g.rotate(Math.PI / 2);
-    g.fillStyle = p.top;
-    g.beginPath(); g.ellipse(0, 0, 9, 4.5, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = p.skin;
-    g.beginPath(); g.arc(8, 0, 3.4, 0, Math.PI * 2); g.fill();
+    g.rotate(p.heading + Math.PI / 2);
+    g.fillStyle = p.shirt;
+    g.beginPath();
+    g.ellipse(0, 0, 4.6, 10, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#e8c39e';
+    g.beginPath();
+    g.arc(0, -11, 3.6, 0, Math.PI * 2);
+    g.fill();
     g.restore();
     return;
   }
-  const bob = Math.sin(p.phase) * 1.6;
-  g.fillStyle = 'rgba(0,0,0,0.25)';
-  g.beginPath(); g.ellipse(p.x + 2, p.y + 4, 7, 3.2, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = p.top;
-  g.beginPath(); g.arc(p.x, p.y + bob * 0.3, 7, 0, Math.PI * 2); g.fill();
-  g.fillStyle = p.skin;
-  g.beginPath(); g.arc(p.x, p.y - 1 + bob * 0.3, 3.6, 0, Math.PI * 2); g.fill();
+  g.fillStyle = p.shirt;
+  g.beginPath();
+  g.arc(p.x, p.y, 7, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#e8c39e';
+  g.beginPath();
+  g.arc(p.x, p.y - 1, 3.6, 0, Math.PI * 2);
+  g.fill();
   if (p.panic > 0) {
     g.fillStyle = '#ffffff';
-    g.font = 'bold 12px system-ui';
+    g.font = 'bold 12px system-ui, sans-serif';
     g.textAlign = 'center';
-    g.fillText('!', p.x + 10, p.y - 8);
+    g.fillText('!', p.x + 9, p.y - 7);
   }
 }
 
-// The job marker: a pulsing ring, a bobbing chevron and a label.
-export function paintGoal(g, goal, colour, label, t) {
-  const pulse = 30 + Math.sin(t * 4) * 4.5;
-  g.strokeStyle = colour;
-  g.lineWidth = 3;
-  g.beginPath(); g.arc(goal.x, goal.y, pulse, 0, Math.PI * 2); g.stroke();
-  g.strokeStyle = 'rgba(255,255,255,0.5)';
-  g.lineWidth = 1.5;
-  g.beginPath(); g.arc(goal.x, goal.y, pulse + 7, 0, Math.PI * 2); g.stroke();
-  const bob = Math.sin(t * 4) * 5;
-  g.fillStyle = colour;
+export function paintGoal(g, goal, color, label, t) {
+  const pulse = 1 + Math.sin(t * 4.2) * 0.1;
+  g.strokeStyle = color;
+  g.lineWidth = 3.4;
   g.beginPath();
-  g.moveTo(goal.x, goal.y - 42 + bob);
-  g.lineTo(goal.x - 11, goal.y - 64 + bob);
-  g.lineTo(goal.x + 11, goal.y - 64 + bob);
-  g.closePath(); g.fill();
+  g.arc(goal.x, goal.y, 29 * pulse, 0, Math.PI * 2);
+  g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.65)';
+  g.lineWidth = 1.6;
+  g.beginPath();
+  g.arc(goal.x, goal.y, 19 * pulse, 0, Math.PI * 2);
+  g.stroke();
+  const bob = Math.sin(t * 4.2) * 5;
+  g.fillStyle = color;
+  g.beginPath();
+  g.moveTo(goal.x, goal.y - 40 + bob);
+  g.lineTo(goal.x - 10, goal.y - 62 + bob);
+  g.lineTo(goal.x + 10, goal.y - 62 + bob);
+  g.closePath();
+  g.fill();
   g.font = 'bold 12px system-ui, sans-serif';
   g.textAlign = 'center';
-  g.fillText(label, goal.x, goal.y - 72 + bob);
+  g.fillText(label, goal.x, goal.y - 70 + bob);
 }

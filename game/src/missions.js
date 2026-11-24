@@ -1,68 +1,79 @@
-// NEON BAY HEAT 2 — jobs and mayhem.
-// One job at a time. DELIVER runs fetch → drop across town against a
-// clock. GETAWAY pays for reaching a hideout while the heat is on — the
-// clock runs slow while stars are up, and grabbing the stash is what
-// brings the heat. Mayhem is a separate combo: chaos feeds it, a lull
-// cashes it out at a multiplier.
+// NEON BAY HEAT 2 — work and mayhem.
+// Two kinds of job. DELIVER: fetch a package from a green ring, then
+// beat the clock to the gold ring. GETAWAY: the stash is already in
+// the car and the pickup itself draws about two stars of heat — the
+// drop only counts once the player has shaken the law off entirely,
+// and the clock runs slow while the stars are up, so the real task is
+// breaking line of sight, not driving fast.
+// Alongside the jobs, mayhem: near misses, slides, shunts and scares
+// feed a combo that multiplies as it grows and cashes out in full the
+// moment the player lets it lapse.
 
-import { WORLD_W, WORLD_H, BEACH_X, JOB_PAY } from './config.js';
+import { WORLD_W, WORLD_H, BEACH_X, PAY } from './config.js';
+import { makeRng, randRange } from './random.js';
+import { nearestRoadPoint } from './city.js';
+import { addHeat } from './police.js';
 
-function farSpot(from, minDist) {
-  for (let i = 0; i < 30; i++) {
-    const x = 150 + Math.random() * (BEACH_X - 300);
-    const y = 150 + Math.random() * (WORLD_H - 300);
-    if (Math.hypot(x - from.x, y - from.y) > minDist) return { x, y };
+const rng = makeRng(90210);
+
+function goalPoint(from, minD, maxD) {
+  for (let tries = 0; tries < 30; tries++) {
+    const x = randRange(rng, 130, BEACH_X - 120);
+    const y = randRange(rng, 130, WORLD_H - 130);
+    const d = Math.hypot(x - from.x, y - from.y);
+    if (d >= minD && d <= maxD) return nearestRoadPoint(x, y);
   }
-  return { x: 420, y: 420 };
+  return nearestRoadPoint(400, 400);
 }
 
 export function newJobs() {
   return {
-    current: null,       // {kind, stage, goal, reward, clock, text}
-    combo: 0, mult: 1, comboLeft: 0,
-    done: 0, banked: 0,
-    notice: '', noticeT: 0,
-    idleFor: 1.2,        // small breather before the first job appears
+    current: null,   // {kind, stage, goal, reward, clock, text}
+    done: 0,
+    banked: 0,
+    idle: 0,
+    combo: 0,
+    mult: 1,
+    comboLeft: 0,
+    banner: '',
+    bannerT: 0,
   };
 }
 
-function offer(jobs, at) {
-  const kind = Math.random() < 0.55 ? 'DELIVER' : 'GETAWAY';
-  jobs.current = {
-    kind,
-    stage: 'fetch',
-    goal: farSpot(at, 520),
-    reward: 0, clock: 0,
-    text: kind === 'DELIVER' ? 'Pick up the package' : 'Grab the stash',
-  };
-  jobs.notice = kind === 'DELIVER' ? 'NEW JOB — DELIVERY' : 'NEW JOB — GETAWAY';
-  jobs.noticeT = 3;
-}
-
-function armLeg(jobs, from) {
-  const job = jobs.current;
-  const drop = farSpot(from, 950);
-  const dist = Math.hypot(drop.x - from.x, drop.y - from.y);
-  job.stage = 'drop';
-  job.goal = drop;
-  job.clock = Math.max(JOB_PAY.minClock, dist * JOB_PAY.secPerPx);
-  const span = job.kind === 'DELIVER'
-    ? [JOB_PAY.deliverMin, JOB_PAY.deliverMax]
-    : [JOB_PAY.getawayMin, JOB_PAY.getawayMax];
-  job.reward = Math.round(span[0] + Math.random() * (span[1] - span[0]));
-  job.text = job.kind === 'DELIVER' ? 'Drop the package off' : 'Reach the hideout clean';
+function offerJob(jobs, at, law) {
+  const kind = rng() < 0.55 ? 'DELIVER' : 'GETAWAY';
+  if (kind === 'DELIVER') {
+    jobs.current = {
+      kind, stage: 'fetch',
+      goal: goalPoint(at, 480, 1250),
+      reward: 0, clock: 0,
+      text: 'Pick up the package',
+    };
+  } else {
+    const goal = goalPoint(at, 700, 1500);
+    const dist = Math.hypot(goal.x - at.x, goal.y - at.y);
+    jobs.current = {
+      kind, stage: 'drop',
+      goal,
+      reward: Math.round(PAY.getawayBase + dist * PAY.getawayPerMeter),
+      clock: Math.max(PAY.clockFloor, dist * PAY.clockPerMeter * 1.7),
+      text: 'Lose the heat, reach the hideout',
+    };
+    addHeat(law, 2.1); // the stash pickup is loud
+  }
+  jobs.banner = kind === 'DELIVER' ? 'NEW JOB — DELIVERY' : 'NEW JOB — GETAWAY';
+  jobs.bannerT = 3;
 }
 
 // emit(event, payload) is optional; every call site guards it.
 export function stepJobs(jobs, dt, at, law, emit) {
-  const say = (ev, payload) => { if (typeof emit === 'function') emit(ev, payload); };
-  jobs.noticeT = Math.max(0, jobs.noticeT - dt);
+  const fire = (ev, payload) => { if (typeof emit === 'function') emit(ev, payload); };
+  jobs.bannerT = Math.max(0, jobs.bannerT - dt);
 
   if (jobs.comboLeft > 0) {
     jobs.comboLeft -= dt;
     if (jobs.comboLeft <= 0 && jobs.combo > 0) {
-      const payout = Math.floor(jobs.combo) * jobs.mult;
-      say('combo-cash', { payout });
+      fire('combo-cash', { payout: Math.floor(jobs.combo) * jobs.mult });
       jobs.combo = 0;
       jobs.mult = 1;
     }
@@ -70,49 +81,54 @@ export function stepJobs(jobs, dt, at, law, emit) {
 
   const job = jobs.current;
   if (!job) {
-    jobs.idleFor -= dt;
-    if (jobs.idleFor <= 0) offer(jobs, at);
+    jobs.idle += dt;
+    if (jobs.idle > 1.4) {
+      jobs.idle = 0;
+      offerJob(jobs, at, law);
+    }
     return;
   }
 
   const dist = Math.hypot(at.x - job.goal.x, at.y - job.goal.y);
-  if (job.stage === 'fetch' && dist < 48) {
-    if (job.kind === 'GETAWAY') addHeatFromStash(law);
-    armLeg(jobs, at);
-    say('fetch', job);
+
+  if (job.kind === 'DELIVER' && job.stage === 'fetch') {
+    if (dist < 46) {
+      const drop = goalPoint(at, 750, 1500);
+      const d2 = Math.hypot(drop.x - at.x, drop.y - at.y);
+      job.stage = 'drop';
+      job.goal = drop;
+      job.reward = Math.round(PAY.deliverBase + d2 * PAY.deliverPerMeter);
+      job.clock = Math.max(PAY.clockFloor, d2 * PAY.clockPerMeter);
+      job.text = 'Drop the package off';
+      fire('fetch', job);
+    }
     return;
   }
-  if (job.stage === 'drop') {
-    job.clock -= dt * (job.kind === 'GETAWAY' && law.stars > 0 ? 0.45 : 1);
-    const clean = job.kind === 'DELIVER' || law.stars === 0;
-    if (dist < 54 && clean) {
-      jobs.done += 1;
-      jobs.banked += job.reward;
-      jobs.notice = `JOB DONE — +$${job.reward}`;
-      jobs.noticeT = 3;
-      say('done', job);
-      jobs.current = null;
-      jobs.idleFor = 2.2;
-      return;
-    }
-    if (job.clock <= 0) {
-      jobs.notice = 'JOB FAILED — TOO SLOW';
-      jobs.noticeT = 3;
-      say('fail', job);
-      jobs.current = null;
-      jobs.idleFor = 2.2;
-    }
-  }
-}
 
-// The stash grab is a crime in itself: two stars of instant attention.
-function addHeatFromStash(law) {
-  law.heat += 2.15;
-  while (law.heat >= 1 && law.stars < 5) { law.stars += 1; law.heat -= 1; }
+  // Timed leg (DELIVER drop, or the whole GETAWAY).
+  if (job.kind === 'GETAWAY' && law.stars > 0) job.clock -= dt * 0.45;
+  else job.clock -= dt;
+
+  const arrived = dist < 52 && (job.kind === 'DELIVER' || law.stars === 0);
+  if (arrived) {
+    jobs.done += 1;
+    jobs.banked += job.reward;
+    jobs.banner = `JOB DONE — +$${job.reward}`;
+    jobs.bannerT = 3;
+    fire('done', job);
+    jobs.current = null;
+    return;
+  }
+  if (job.clock <= 0) {
+    jobs.banner = 'JOB FAILED';
+    jobs.bannerT = 3;
+    fire('fail', job);
+    jobs.current = null;
+  }
 }
 
 export function addMayhem(jobs, points) {
   jobs.combo += points;
   jobs.comboLeft = 4;
-  jobs.mult = 1 + Math.min(4, Math.floor(jobs.combo / 32));
+  jobs.mult = Math.min(5, 1 + Math.floor(jobs.combo / 45));
 }

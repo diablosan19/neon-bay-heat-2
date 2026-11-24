@@ -1,112 +1,168 @@
 // NEON BAY HEAT 2 — the city itself.
-// Grown from a seed: a grid of avenues, blocks packed with roofed
-// buildings (some wearing neon), trees in the gaps, and a beach strip
-// down the east side. Four districts, one per quadrant, each with its
-// own roof palette and sign flavour.
+// buildCity grows the whole map from one seed: the avenue grid, four
+// named districts with their own roof palettes and neon vocabularies,
+// and every block filled as buildings, a parking lot or a palm plaza.
+// Everything static lives here; the moving pieces live elsewhere.
 
-import { WORLD_W, WORLD_H, PITCH, ROAD_W, BEACH_X } from './config.js';
-import { rng32, between, betweenInt, pick, chance } from './random.js';
+import {
+  WORLD_W, WORLD_H, PITCH, ROAD_W, FIRST_RD, BEACH_X,
+} from './config.js';
+import { makeRng, randRange, randInt, pick } from './random.js';
+
+// Avenues west to east, streets north to south.
+export const V_ROADS = [];
+for (let x = FIRST_RD; x < WORLD_W - 180; x += PITCH) V_ROADS.push(x);
+export const H_ROADS = [];
+for (let y = FIRST_RD; y < WORLD_H - 80; y += PITCH) H_ROADS.push(y);
 
 export const DISTRICTS = [
-  { name: 'VICE POINT', roofs: ['#5d6a7a', '#6b7686', '#54626f'], signs: ['HOTEL', 'CASINO', 'BAR VICE', 'CLUB 88', 'DINER'] },
-  { name: 'CORAL DOCKS', roofs: ['#71604c', '#7d6a52', '#665741'], signs: ['FISH CO', 'TACKLE', 'PORT BAR', 'CRATES', 'FERRY'] },
-  { name: 'PALM TERRACE', roofs: ['#5f7a68', '#6c8574', '#55705f'], signs: ['MOTEL', 'SURF SHOP', 'CAFE PALM', 'GYM', '24H STORE'] },
-  { name: 'OLD MARKET', roofs: ['#77626e', '#836e7a', '#6d5864'], signs: ['PAWN', 'NOODLES', 'MARKET', 'TATTOO', 'LIQUOR'] },
+  { name: 'OLD MARKET', x0: 0, y0: 0, x1: 1600, y1: 1200,
+    roofs: ['#7a5c48', '#6e5646', '#83644e', '#75584a'],
+    signs: ['DELI', 'PAWN', 'HOTEL', 'BAR', 'BAKERY', 'LOANS'] },
+  { name: 'VICE POINT', x0: 1600, y0: 0, x1: BEACH_X, y1: 1200,
+    roofs: ['#4d5a78', '#5a4a72', '#44586e', '#524a80'],
+    signs: ['CLUB NEON', 'CASINO', 'HOTEL', 'LOUNGE', '24H', 'INK'] },
+  { name: 'PALM TERRACE', x0: 0, y0: 1200, x1: 1600, y1: WORLD_H,
+    roofs: ['#5d7263', '#687a5e', '#5a6e60', '#716f56'],
+    signs: ['CAFE', 'GYM', 'FLORIST', 'BOOKS', 'DINER', 'YOGA'] },
+  { name: 'CORAL DOCKS', x0: 1600, y0: 1200, x1: BEACH_X, y1: WORLD_H,
+    roofs: ['#6e5a52', '#5f6068', '#71604e', '#64555f'],
+    signs: ['TACKLE', 'MOTEL', 'FUEL', 'BOATS', 'PIZZA', 'BAR'] },
 ];
-const NEON_COLS = ['#ff5da2', '#37e0c8', '#ffd23f', '#7ab8ff', '#ff8a5c', '#b28dff'];
 
-export function districtIndexAt(x, y) {
-  const east = x >= WORLD_W / 2 ? 1 : 0;
-  const south = y >= WORLD_H / 2 ? 1 : 0;
-  return south * 2 + east; // 0 NW, 1 NE, 2 SW, 3 SE
-}
-export function districtNameAt(x, y) {
-  return DISTRICTS[districtIndexAt(x, y)].name;
-}
+const NEON = ['#ff5da2', '#37e0c8', '#ffd23f', '#8ab6ff', '#ff8a5c', '#c792ff'];
 
-// Road centrelines: verticals at x = PITCH/2 + k*PITCH, same for rows.
-export function vRoads() {
-  const xs = [];
-  for (let x = PITCH / 2; x < WORLD_W; x += PITCH) xs.push(x);
-  return xs;
-}
-export function hRoads() {
-  const ys = [];
-  for (let y = PITCH / 2; y < WORLD_H; y += PITCH) ys.push(y);
-  return ys;
+export function districtAt(x, y) {
+  for (const d of DISTRICTS) {
+    if (x >= d.x0 && x < d.x1 && y >= d.y0 && y < d.y1) return d;
+  }
+  return DISTRICTS[1];
 }
 
 export function buildCity(seed) {
-  const rng = rng32(seed * 7919 + 13);
+  const rng = makeRng(seed * 7919 + 13);
   const buildings = [];
-  const trees = [];
-  const half = ROAD_W / 2 + 14; // keep-out from each centreline
+  const parkingSpots = [];
+  const palms = [];
+  const cells = [];
 
-  // Blocks live between neighbouring centrelines: block (bx, by) fills
-  // the square whose top-left centreline crossing is (bx, by).
-  for (let bx = 0; PITCH / 2 + (bx + 1) * PITCH <= WORLD_W; bx++) {
-    for (let by = 0; PITCH / 2 + (by + 1) * PITCH <= WORLD_H; by++) {
-      const x0 = PITCH / 2 + bx * PITCH + half;
-      const y0 = PITCH / 2 + by * PITCH + half;
-      const span = PITCH - half * 2;
-      const cx = PITCH / 2 + bx * PITCH + PITCH / 2;
-      const cy = PITCH / 2 + by * PITCH + PITCH / 2;
-      if (cx > BEACH_X) continue; // beach blocks stay open sand
-      const district = DISTRICTS[districtIndexAt(cx, cy)];
-      const count = betweenInt(rng, 1, 3);
-      for (let i = 0; i < count; i++) {
-        const w = between(rng, 56, span - 30);
-        const h = between(rng, 56, span - 30);
-        const x = x0 + between(rng, 0, Math.max(1, span - w));
-        const y = y0 + between(rng, 0, Math.max(1, span - h));
-        const signed = chance(rng, 0.4);
-        buildings.push({
-          x, y, w, h,
-          roof: pick(rng, district.roofs),
-          sign: signed ? pick(rng, district.signs) : null,
-          signCol: pick(rng, NEON_COLS),
-          wins: Array.from({ length: 10 }, () => chance(rng, 0.5)),
-        });
-      }
-      const grove = betweenInt(rng, 0, 3);
-      for (let i = 0; i < grove; i++) {
-        trees.push({ x: x0 + between(rng, 6, span - 6), y: y0 + between(rng, 6, span - 6), r: between(rng, 10, 17) });
+  // Block interiors are the land between road edges, from the map rim
+  // in the west to the beach in the east.
+  const xEdges = [24, ...V_ROADS, BEACH_X];
+  const yEdges = [24, ...H_ROADS, WORLD_H - 24];
+  const half = ROAD_W / 2 + 8;
+
+  for (let i = 0; i < xEdges.length - 1; i++) {
+    for (let j = 0; j < yEdges.length - 1; j++) {
+      const x0 = xEdges[i] + (i === 0 ? 0 : half);
+      const x1 = xEdges[i + 1] - (i === xEdges.length - 2 ? 0 : half);
+      const y0 = yEdges[j] + (j === 0 ? 0 : half);
+      const y1 = yEdges[j + 1] - (j === yEdges.length - 2 ? 0 : half);
+      if (x1 - x0 < 90 || y1 - y0 < 90) continue;
+      const cell = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+      cells.push(cell);
+      const d = districtAt(x0 + cell.w / 2, y0 + cell.h / 2);
+      const roll = rng();
+
+      if (roll < 0.66) {
+        // Buildings: one slab or a pair, never touching the pavement edge.
+        const count = rng() < 0.45 ? 1 : 2;
+        for (let k = 0; k < count; k++) {
+          const bw = randRange(rng, 0.34, 0.44) * cell.w;
+          const bh = randRange(rng, 0.34, 0.44) * cell.h;
+          const bx = count === 1
+            ? x0 + (cell.w - bw) / 2
+            : x0 + 10 + k * (cell.w - bw - 16);
+          const by = count === 1
+            ? y0 + (cell.h - bh) / 2
+            : y0 + 10 + ((k * 53) % Math.max(20, cell.h - bh - 20));
+          const cols = Math.max(2, Math.floor(bw / 17));
+          const rows = Math.max(2, Math.floor(bh / 17));
+          const lit = [];
+          for (let n = 0; n < cols * rows; n++) lit.push(rng() < 0.52);
+          buildings.push({
+            x: bx, y: by, w: bw, h: bh,
+            roof: pick(rng, d.roofs),
+            lit, cols, rows,
+            sign: rng() < 0.5 ? pick(rng, d.signs) : null,
+            signColor: pick(rng, NEON),
+          });
+        }
+      } else if (roll < 0.84) {
+        // Parking lot: two rows of marked bays along the cell's long axis.
+        const alongX = cell.w >= cell.h;
+        const n = randInt(rng, 3, 5);
+        for (let k = 0; k < n; k++) {
+          for (const side of [-1, 1]) {
+            parkingSpots.push({
+              x: alongX ? x0 + 26 + k * ((cell.w - 52) / Math.max(1, n - 1)) : x0 + cell.w / 2 + side * (cell.w / 4),
+              y: alongX ? y0 + cell.h / 2 + side * (cell.h / 4) : y0 + 26 + k * ((cell.h - 52) / Math.max(1, n - 1)),
+              heading: alongX ? (side < 0 ? Math.PI / 2 : -Math.PI / 2) : (side < 0 ? 0 : Math.PI),
+              lot: true,
+            });
+          }
+        }
+      } else {
+        // Plaza: palms in a loose ring, room to cut through.
+        const n = randInt(rng, 4, 7);
+        for (let k = 0; k < n; k++) {
+          palms.push({
+            x: x0 + randRange(rng, 18, cell.w - 18),
+            y: y0 + randRange(rng, 18, cell.h - 18),
+            r: randRange(rng, 13, 19),
+          });
+        }
       }
     }
   }
-  // Palms along the sand.
-  for (let y = 60; y < WORLD_H - 40; y += between(rng, 120, 210)) {
-    trees.push({ x: BEACH_X + between(rng, 30, 130), y, r: between(rng, 11, 16), palm: true });
+
+  // A palm fringe along the sand.
+  for (let y = 70; y < WORLD_H - 40; y += randRange(rng, 120, 210)) {
+    palms.push({ x: randRange(rng, BEACH_X + 30, BEACH_X + 130), y, r: randRange(rng, 14, 20) });
   }
-  return { buildings, trees, vRoads: vRoads(), hRoads: hRoads() };
+
+  return { buildings, parkingSpots, palms, cells, seed };
 }
 
-// Circle-vs-buildings: push the circle out along the shallowest axis.
-export function pushOutOfBuildings(city, body, radius) {
+// Circle against every nearby building footprint; resolves the overlap
+// by pushing the circle out along its smallest escape axis.
+export function pushOutOfBuildings(city, o, r) {
   for (const b of city.buildings) {
-    const nx = Math.max(b.x, Math.min(body.x, b.x + b.w));
-    const ny = Math.max(b.y, Math.min(body.y, b.y + b.h));
-    const dx = body.x - nx;
-    const dy = body.y - ny;
+    const nx = Math.max(b.x, Math.min(o.x, b.x + b.w));
+    const ny = Math.max(b.y, Math.min(o.y, b.y + b.h));
+    const dx = o.x - nx;
+    const dy = o.y - ny;
     const d2 = dx * dx + dy * dy;
-    if (d2 >= radius * radius) continue;
+    if (d2 >= r * r) continue;
     if (d2 > 0.0001) {
       const d = Math.sqrt(d2);
-      body.x = nx + (dx / d) * radius;
-      body.y = ny + (dy / d) * radius;
+      o.x = nx + (dx / d) * r;
+      o.y = ny + (dy / d) * r;
     } else {
-      // Centre inside the footprint: exit through the nearest face.
-      const left = body.x - b.x, right = b.x + b.w - body.x;
-      const top = body.y - b.y, bot = b.y + b.h - body.y;
-      const m = Math.min(left, right, top, bot);
-      if (m === left) body.x = b.x - radius;
-      else if (m === right) body.x = b.x + b.w + radius;
-      else if (m === top) body.y = b.y - radius;
-      else body.y = b.y + b.h + radius;
+      // Centre is inside the footprint: leave by the nearest face.
+      const left = o.x - b.x;
+      const right = b.x + b.w - o.x;
+      const top = o.y - b.y;
+      const bottom = b.y + b.h - o.y;
+      const m = Math.min(left, right, top, bottom);
+      if (m === left) o.x = b.x - r;
+      else if (m === right) o.x = b.x + b.w + r;
+      else if (m === top) o.y = b.y - r;
+      else o.y = b.y + b.h + r;
     }
+    return true;
   }
+  return false;
 }
 
-export function insideBuilding(city, x, y) {
-  return city.buildings.some((b) => x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h);
+// The road point nearest to (x, y): used to put spawning cruisers and
+// job goals on asphalt instead of in someone's lobby.
+export function nearestRoadPoint(x, y) {
+  let bestX = V_ROADS[0];
+  for (const vx of V_ROADS) if (Math.abs(vx - x) < Math.abs(bestX - x)) bestX = vx;
+  let bestY = H_ROADS[0];
+  for (const hy of H_ROADS) if (Math.abs(hy - y) < Math.abs(bestY - y)) bestY = hy;
+  return Math.abs(bestX - x) < Math.abs(bestY - y)
+    ? { x: bestX, y }
+    : { x, y: bestY };
 }

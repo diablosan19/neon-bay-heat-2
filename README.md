@@ -1,54 +1,56 @@
 # NEON BAY HEAT 2
 
-A top-down open-world crime game that runs entirely in the browser — no
-libraries, no network requests, just the static files in `game/`.
+A top-down open-world crime game that runs entirely in the browser —
+no libraries, no network, nothing to install. Open `game/index.html`
+and the bay is yours.
 
 ## The city
 
-One seeded city, 3,200 × 2,400, grown fresh from the seed on every load:
-an avenue grid with kerbs and centre dashes, four named districts —
-Vice Point, Coral Docks, Palm Terrace and Old Market — each with its own
-roof colours and neon signage, hundreds of buildings with lit windows,
-trees in the gaps, and a beach running down the east side into the sea.
+One seeded city, 3,200 × 2,400, grown fresh from the seed on every
+load: an avenue grid with lane dashes and crosswalks, four named
+districts (Old Market, Vice Point, Palm Terrace, Coral Docks) with
+their own roof colours and neon signs, parking lots, palm plazas, and
+a beach that runs down the east side into open water.
 
 ## What you do
 
 - **Walk and drive.** WASD or arrows on foot, SHIFT to sprint. Walk up
-  to any car and press **E** to steal it. Five types to take — coupe,
-  sedan, taxi, pickup, van — moving in traffic or parked at the kerb.
-- **Traffic lives here.** Cars hold their right-hand lanes, turn at
-  junctions, and brake when you cut them up. Pedestrians stroll the
-  blocks and the sand, and dive away from anything fast.
-- **The law responds.** Theft, shunts and knockdowns feed a five-star
-  wanted level. Cruisers roll in, steer for where you're heading, and
-  box you in; sit slow inside their ring and the bust meter fills.
-  Break their sight for long enough and the stars fall away, one by
-  one. A bust costs a fine scaled to your heat.
-- **Run jobs.** DELIVER: fetch a package, then drop it across town
-  against the clock. GETAWAY: grabbing the stash brings two stars of
-  heat by itself — reach the hideout only once you've shaken them.
-- **Mayhem pays.** Near misses, long slides, shunts and pedestrian
-  scares build a combo with a rising multiplier. When the chaos cools
-  off, the combo cashes out into your wallet.
-- **Full HUD.** Cash, jobs and banked totals, district name, wanted
-  stars, bust meter, the live objective with distance and countdown,
-  and a minimap with blips for police, traffic, the job and you.
-- **Sound, synthesized.** Engine, siren, horns, grabs, payouts and the
-  bust jingle are all WebAudio — there are no audio files.
-- **Pause and save** with P. Cash, jobs and position persist between
-  visits in localStorage.
+  to any car and press **E** to steal it — coupes, sedans, taxis,
+  pickups and vans, moving or parked. Moving thefts draw more heat.
+- **Living traffic.** Cars hold their lanes, turn at junctions, and
+  brake (and honk) when you cut them up. Pedestrians stroll the
+  pavements and the beach, and dive away from fast cars.
+- **The law.** Theft, shunts and knockdowns build a wanted level up to
+  five stars. Cruisers steer for where you're *going*, try to box you
+  in, and fill the bust meter when they can hold you slow. Break their
+  line of sight for long enough and the stars fall away, one by one.
+  A bust costs a fine scaled to your stars.
+- **Jobs.** DELIVER: fetch the package, then beat the clock to the
+  drop. GETAWAY: the pickup itself draws two stars — lose the heat
+  completely, then reach the hideout; the clock runs slow while you're
+  starred, so the job is escaping, not speeding.
+- **Mayhem.** Near misses, long slides, shunts and scares feed a combo
+  that multiplies as it grows. Let it lapse and it banks as cash.
+- **Full HUD.** Cash and career stats, wanted stars, bust meter, job
+  objective with distance and clock, off-screen goal arrow, and a live
+  minimap with police, traffic and goal blips.
+- **Synthesized sound.** Engine, sirens, horns, pickups and the bust
+  jingle are all WebAudio — there are no audio files.
+- **Pause and save** on P; cash, jobs completed and your position
+  persist between visits.
 
 ## Layout
 
-`game/src/` is split one job per file: `config.js` holds the tuning,
-`random.js` the seeded RNG, `city.js` grows the world, `input.js` reads
-the keyboard, `vehicles.js` is the car factory, physics and traffic
-brain, `peds.js` walks the crowd, `police.js` runs the wanted system,
-`missions.js` hands out jobs and tracks mayhem, `audio.js` synthesizes
-the sound, `render.js` paints the world, `hud.js` paints the screen,
-and `main.js` wires it all together. `main.ts` at the root hands the
-game in with its screenshots and dossier.
+`game/src/` is one job per file: `city.js` grows the world,
+`vehicles.js` is the car factory, the driving physics and the traffic
+brain, `police.js` runs the wanted system and the pursuit, `missions.js`
+deals the jobs and the mayhem combo, `peds.js` walks the crowd,
+`render.js` paints the world, `hud.js` paints the screen furniture,
+`audio.js` synthesizes the sound, `input.js` reads the keyboard,
+`random.js` is the seeded generator, `config.js` holds the tuning, and
+`main.js` wires it all together. `main.ts` at the root hands the game
+in with its screenshots and dossier.
 
-The four screenshots show the title screen, a four-star chase with a
-live delivery objective, the city running down to the beach, and a
-drop-off under pursuit.
+The four screenshots are the title screen, a four-star chase with a
+delivery in progress, a wide establishing view of the city down to the
+beach, and a drop-off under pursuit.

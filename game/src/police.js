@@ -1,24 +1,31 @@
 // NEON BAY HEAT 2 — the law.
-// Heat is fractional; whole points become stars. Cruisers roll in from
-// off-screen, steer for where the player is heading, and try to sit in
-// the bust ring around a slow player. Unseen long enough, stars fall.
+// A wanted level from zero to five stars. Heat is earned in fractions
+// (a theft is worth most of a star, a knocked-down pedestrian more
+// than one) and spent by staying out of sight: when no cruiser is
+// close enough to see the player for long enough, a star falls off.
+// Cruisers steer for an intercept point ahead of the player rather
+// than the player's tail, and the bust lands only when they can hold
+// the player slow inside a tight ring — speed is always an escape.
 
-import { WORLD_W, WORLD_H, LAW } from './config.js';
-import { makeCar, driveCar } from './vehicles.js';
+import { LAW } from './config.js';
+import { makeRng } from './random.js';
+import { makeCar, driveCar, roadPointAtRing } from './vehicles.js';
 
 export function newLaw() {
   return {
     stars: 0,
-    heat: 0,
-    fleet: [],
-    unseenFor: 0,
-    bustMeter: 0,
+    heat: 0,        // fractional progress toward the next star
+    fleet: [],      // cruisers, all built by the vehicles factory
+    unseen: 0,      // seconds since a cruiser last had eyes on
+    bust: 0,        // 0..1 meter
     busted: false,
+    spawnT: 0,
+    rng: makeRng(4242),
   };
 }
 
-export function addHeat(law, amount) {
-  law.heat += amount;
+export function addHeat(law, points) {
+  law.heat += points;
   while (law.heat >= 1 && law.stars < LAW.maxStars) {
     law.stars += 1;
     law.heat -= 1;
@@ -26,66 +33,81 @@ export function addHeat(law, amount) {
   if (law.stars >= LAW.maxStars) law.heat = Math.min(law.heat, 0.95);
 }
 
-function rollIn(law, target) {
-  const ang = Math.random() * Math.PI * 2;
-  const dist = 600 + Math.random() * 140;
-  const x = Math.max(26, Math.min(WORLD_W - 26, target.x + Math.cos(ang) * dist));
-  const y = Math.max(26, Math.min(WORLD_H - 26, target.y + Math.sin(ang) * dist));
-  const cop = makeCar(x, y, ang + Math.PI, 'cruiser', '#edf0f4');
-  cop.top += law.stars * 7; // hotter chases run faster cruisers
-  law.fleet.push(cop);
+function cruisersWanted(law) {
+  return law.stars === 0 ? 0 : Math.min(law.stars + 1, 6);
 }
 
 export function stepLaw(law, dt, target, city) {
   if (law.busted) return;
-  const wanted = law.stars > 0;
-  const strength = Math.min(2 + law.stars, 7);
-  if (wanted && law.fleet.length < strength) rollIn(law, target);
-  if (!wanted && law.fleet.length) {
-    law.fleet = law.fleet.filter((c) => Math.hypot(c.x - target.x, c.y - target.y) < 950);
-  }
+  law.spawnT -= dt;
 
-  let anySight = false;
-  let inRing = 0;
+  const want = cruisersWanted(law);
+  if (law.fleet.length < want && law.spawnT <= 0) {
+    law.spawnT = 0.7;
+    const dist = LAW.spawnMin + law.rng() * (LAW.spawnMax - LAW.spawnMin);
+    const p = roadPointAtRing(target.x, target.y, dist, law.rng);
+    const cop = makeCar(p.x, p.y, Math.atan2(target.y - p.y, target.x - p.x), 'cruiser');
+    cop.stolen = true; // not a car the player can be accused of taking
+    law.fleet.push(cop);
+  }
+  // Cruisers give up and peel off when the heat is gone or they're lost.
+  law.fleet = law.fleet.filter((cop) => {
+    const d = Math.hypot(cop.x - target.x, cop.y - target.y);
+    return !(law.stars === 0 && d > 700) && d < 1150;
+  });
+
+  let seen = false;
+  let pinning = 0;
   for (const cop of law.fleet) {
     const dx = target.x - cop.x;
     const dy = target.y - cop.y;
     const dist = Math.hypot(dx, dy);
-    if (dist < LAW.sightR) anySight = true;
-    // Intercept steering: aim ahead of the target's motion.
-    const aimX = target.x + (target.vx || 0) * 0.34;
-    const aimY = target.y + (target.vy || 0) * 0.34;
-    const want = Math.atan2(aimY - cop.y, aimX - cop.x);
-    let diff = want - cop.heading;
+    if (dist < LAW.sightR) seen = true;
+    if (dist < LAW.bustR) pinning += 1;
+
+    // Intercept: aim where the player will be, not where they were.
+    const lead = Math.min(0.55, dist / 320);
+    const ax = target.x + (target.vx || 0) * lead;
+    const ay = target.y + (target.vy || 0) * lead;
+    let diff = Math.atan2(ay - cop.y, ax - cop.x) - cop.heading;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    const steer = Math.max(-1, Math.min(1, diff * 2.6));
-    driveCar(cop, dt, dist > 52 ? 1 : 0.3, steer, city);
-    if (dist < LAW.bustR && Math.abs(target.speed) < LAW.slowUnder) inRing++;
+    const steer = Math.max(-1, Math.min(1, diff * 2.3));
+    const throttle = dist > 52 ? 1 : 0.2;
+    driveCar(cop, dt, throttle, steer, city);
   }
 
-  law.unseenFor = anySight ? 0 : law.unseenFor + dt;
-  if (law.unseenFor > LAW.loseTime && law.stars > 0) {
-    law.stars -= 1;
-    law.unseenFor = 0;
-    if (law.stars === 0) law.fleet.length = 0;
+  if (seen) {
+    law.unseen = 0;
+  } else if (law.stars > 0) {
+    law.unseen += dt;
+    if (law.unseen >= LAW.loseTime) {
+      law.stars -= 1;
+      law.heat = 0;
+      law.unseen = 0;
+    }
   }
 
-  if (inRing > 0 && wanted) {
-    law.bustMeter += dt / LAW.bustFill;
-    if (law.bustMeter >= 1) { law.bustMeter = 1; law.busted = true; }
+  if (pinning > 0 && law.stars > 0 && target.speed < LAW.slowUnder) {
+    law.bust += dt / LAW.bustFill;
+    if (law.bust >= 1) {
+      law.bust = 1;
+      law.busted = true;
+    }
   } else {
-    law.bustMeter = Math.max(0, law.bustMeter - dt * 0.65);
+    law.bust = Math.max(0, law.bust - dt * 0.55);
   }
 }
 
+// After a bust: the fine is scaled by the stars at capture, and the
+// slate is wiped clean. Returns the amount actually taken.
 export function settleBust(law, cash) {
   const fine = Math.min(cash, 140 + law.stars * 95);
   law.stars = 0;
   law.heat = 0;
-  law.fleet.length = 0;
-  law.bustMeter = 0;
+  law.fleet = [];
+  law.unseen = 0;
+  law.bust = 0;
   law.busted = false;
-  law.unseenFor = 0;
   return fine;
 }

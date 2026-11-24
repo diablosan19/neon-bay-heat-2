@@ -1,69 +1,83 @@
-// NEON BAY HEAT 2 — synthesized sound, no samples.
-// An engine saw that follows speed, a two-tone siren while the law is
-// interested, and little one-shot blips for game events. Everything is
-// built lazily on first unlock so a page load never makes a sound.
+// NEON BAY HEAT 2 — synthesized sound.
+// No audio files: everything is oscillators and envelopes through one
+// WebAudio context. The engine is a sawtooth whose pitch follows the
+// car's speed, the siren a triangle wave wobbling between two tones,
+// and every event — theft, shunt, pickup, payout, bust — gets a short
+// shaped blip. Browsers refuse audio before a gesture, so the context
+// stays dormant until unlock() and every method is safe to call blind.
 
 export function createAudio() {
   let ac = null;
-  let engineOsc = null, engineGain = null;
-  let sirenOsc = null, sirenGain = null;
+  let engineOsc = null;
+  let engineGain = null;
+  let sirenOsc = null;
+  let sirenGain = null;
 
-  function open() {
-    if (ac) return true;
+  function unlock() {
+    if (ac) {
+      if (ac.state === 'suspended') ac.resume().catch(() => {});
+      return;
+    }
     try {
       ac = new (window.AudioContext || window.webkitAudioContext)();
       engineOsc = ac.createOscillator();
       engineOsc.type = 'sawtooth';
+      engineOsc.frequency.value = 52;
       engineGain = ac.createGain();
       engineGain.gain.value = 0;
       engineOsc.connect(engineGain).connect(ac.destination);
       engineOsc.start();
       sirenOsc = ac.createOscillator();
       sirenOsc.type = 'triangle';
+      sirenOsc.frequency.value = 720;
       sirenGain = ac.createGain();
       sirenGain.gain.value = 0;
       sirenOsc.connect(sirenGain).connect(ac.destination);
       sirenOsc.start();
-    } catch { ac = null; }
-    return !!ac;
+    } catch {
+      ac = null;
+    }
   }
 
-  function tone(freq, dur, type = 'square', vol = 0.1, slideTo = 0, delay = 0) {
-    if (!open()) return;
-    const t0 = ac.currentTime + delay;
-    const o = ac.createOscillator();
-    const gn = ac.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t0);
-    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(28, slideTo), t0 + dur);
-    gn.gain.setValueAtTime(vol, t0);
-    gn.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-    o.connect(gn).connect(ac.destination);
-    o.start(t0);
-    o.stop(t0 + dur + 0.02);
+  function blip(freq, dur, type, vol, delay = 0, slideTo = 0) {
+    if (!ac) return;
+    try {
+      const t0 = ac.currentTime + delay;
+      const o = ac.createOscillator();
+      const gn = ac.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, t0);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(28, slideTo), t0 + dur);
+      gn.gain.setValueAtTime(vol, t0);
+      gn.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      o.connect(gn).connect(ac.destination);
+      o.start(t0);
+      o.stop(t0 + dur + 0.02);
+    } catch { /* a missed blip is not an error worth surfacing */ }
   }
 
   return {
-    unlock() { if (open() && ac.state === 'suspended') ac.resume(); },
-    engine(ratio, active) {
-      if (!ac) return;
-      engineGain.gain.value = active ? 0.028 + Math.abs(ratio) * 0.05 : 0;
-      engineOsc.frequency.value = 52 + Math.abs(ratio) * 138;
+    unlock,
+    engine(ratio, inCar) {
+      if (!ac || !engineGain) return;
+      const r = Math.min(1, Math.abs(ratio));
+      engineGain.gain.setTargetAtTime(inCar ? 0.028 + r * 0.05 : 0, ac.currentTime, 0.08);
+      engineOsc.frequency.setTargetAtTime(50 + r * 135, ac.currentTime, 0.06);
     },
     siren(on, t) {
-      if (!ac) return;
-      sirenGain.gain.value = on ? 0.014 : 0;
-      if (on) sirenOsc.frequency.value = 715 + Math.sin(t * 5.4) * 185;
+      if (!ac || !sirenGain) return;
+      sirenGain.gain.setTargetAtTime(on ? 0.014 : 0, ac.currentTime, 0.1);
+      if (on) sirenOsc.frequency.setTargetAtTime(715 + Math.sin(t * 5.4) * 185, ac.currentTime, 0.03);
     },
-    horn() { tone(196, 0.15, 'square', 0.05); tone(147, 0.15, 'square', 0.04); },
-    thud() { tone(110, 0.2, 'sawtooth', 0.15, 55); },
-    grab() { tone(620, 0.09, 'sine', 0.13); tone(930, 0.13, 'sine', 0.13, 0, 0.07); },
-    paid() { tone(880, 0.08, 'triangle', 0.14); tone(1318, 0.15, 'triangle', 0.14, 0, 0.06); },
-    alarm() { tone(1175, 0.1, 'square', 0.09); },
+    horn() { blip(233, 0.16, 'square', 0.05); blip(175, 0.16, 'square', 0.04); },
+    thud() { blip(118, 0.2, 'sine', 0.2, 0, 38); },
+    grab() { blip(620, 0.09, 'sine', 0.13); blip(930, 0.13, 'sine', 0.13, 0.07); },
+    paid() { blip(880, 0.09, 'triangle', 0.15); blip(1174, 0.1, 'triangle', 0.15, 0.06); blip(1568, 0.16, 'triangle', 0.15, 0.12); },
+    alarm() { blip(1175, 0.11, 'square', 0.09); blip(1175, 0.11, 'square', 0.09, 0.16); },
     bustedJingle() {
-      tone(392, 0.18, 'square', 0.13);
-      tone(311, 0.18, 'square', 0.13, 0, 0.16);
-      tone(233, 0.4, 'square', 0.13, 0, 0.32);
+      blip(392, 0.18, 'square', 0.12);
+      blip(311, 0.18, 'square', 0.12, 0.17);
+      blip(233, 0.4, 'square', 0.12, 0.34);
     },
   };
 }
