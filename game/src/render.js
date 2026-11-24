@@ -1,151 +1,173 @@
-// NEON BAY HEAT 2 — world rendering.
-// One job: draw the city from the camera's view — water, sand, grass,
-// roads with lane markings, buildings with lit windows and neon signs,
-// palm trees, then the mission markers the player drives toward.
+// NEON BAY HEAT 2 — world and entity drawing.
+// Everything here works in world coordinates; the caller sets up the
+// camera transform first. Only the slice of the city near the camera is
+// drawn, which keeps the frame cheap despite a few hundred buildings.
 
-import { COLORS, WORLD } from './config.js';
-import { districtAt } from './city.js';
+import { PALETTE, WORLD_W, WORLD_H, ROAD_W, SHORE_X } from './config.js';
 
-export function drawWorld(ctx, city, cam, t) {
-  const { width: W, height: H } = WORLD;
-  // Ground: water everywhere first, then the land mass, sand, grass.
-  ctx.fillStyle = COLORS.water;
-  ctx.fillRect(cam.x, cam.y, cam.w, cam.h);
-  // gentle water shimmer
-  ctx.fillStyle = 'rgba(255,255,255,0.05)';
-  for (let i = 0; i < 26; i++) {
-    const wx = WORLD.beachX + 130 + ((i * 173 + Math.sin(t * 0.7 + i) * 24) % 300);
-    const wy = (i * 331) % H;
-    if (wx > cam.x - 40 && wx < cam.x + cam.w + 40 && wy > cam.y && wy < cam.y + cam.h) ctx.fillRect(wx, wy, 44, 3);
+export function paintWorld(g, city, cam, t) {
+  const x0 = cam.x - 70, y0 = cam.y - 70;
+  const x1 = cam.x + cam.w + 70, y1 = cam.y + cam.h + 70;
+
+  // Sea base, then land, then the sand strip along the shore.
+  g.fillStyle = PALETTE.sea;
+  g.fillRect(cam.x - 4, cam.y - 4, cam.w + 8, cam.h + 8);
+  g.fillStyle = PALETTE.seaLight;
+  for (let i = 0; i < 22; i++) {
+    const wx = SHORE_X + 190 + ((i * 181 + Math.sin(t * 0.6 + i * 1.7) * 26) % 260);
+    const wy = (i * 347) % WORLD_H;
+    if (wx > x0 && wx < x1 && wy > y0 && wy < y1) g.fillRect(wx, wy, 46, 3);
   }
-  ctx.fillStyle = COLORS.sand;
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = COLORS.grass;
-  ctx.fillRect(0, 0, WORLD.beachX, H);
-  ctx.fillStyle = COLORS.sand;
-  ctx.fillRect(WORLD.beachX, 0, W - WORLD.beachX, H);
+  g.fillStyle = PALETTE.sandDark;
+  g.fillRect(0, 0, WORLD_W, WORLD_H);
+  g.fillStyle = PALETTE.turf;
+  g.fillRect(0, 0, SHORE_X, WORLD_H);
+  g.fillStyle = PALETTE.sand;
+  g.fillRect(SHORE_X, 0, WORLD_W - SHORE_X, WORLD_H);
 
-  // Roads.
-  ctx.fillStyle = COLORS.road;
-  for (const x of city.vRoads) ctx.fillRect(x - WORLD.roadHalf, 0, WORLD.roadHalf * 2, H);
-  for (const y of city.hRoads) ctx.fillRect(0, y - WORLD.roadHalf, WORLD.beachX + 60, WORLD.roadHalf * 2);
-  // Sidewalk edges.
-  ctx.fillStyle = COLORS.sidewalk;
-  for (const x of city.vRoads) { ctx.fillRect(x - WORLD.roadHalf - 5, 0, 5, H); ctx.fillRect(x + WORLD.roadHalf, 0, 5, H); }
-  // Lane dashes.
-  ctx.fillStyle = COLORS.roadLine;
-  for (const x of city.vRoads) for (let y = 12; y < H; y += 56) ctx.fillRect(x - 2, y, 4, 26);
-  for (const y of city.hRoads) for (let x = 12; x < WORLD.beachX + 40; x += 56) ctx.fillRect(x, y - 2, 26, 4);
+  // Avenues: edge, asphalt, kerbs, centre dashes.
+  for (const x of city.vRoads) {
+    if (x < x0 || x > x1) continue;
+    g.fillStyle = PALETTE.asphaltEdge;
+    g.fillRect(x - ROAD_W / 2 - 6, 0, ROAD_W + 12, WORLD_H);
+    g.fillStyle = PALETTE.asphalt;
+    g.fillRect(x - ROAD_W / 2, 0, ROAD_W, WORLD_H);
+  }
+  for (const y of city.hRoads) {
+    if (y < y0 || y > y1) continue;
+    g.fillStyle = PALETTE.asphaltEdge;
+    g.fillRect(0, y - ROAD_W / 2 - 6, SHORE_X + 80, ROAD_W + 12);
+    g.fillStyle = PALETTE.asphalt;
+    g.fillRect(0, y - ROAD_W / 2, SHORE_X + 80, ROAD_W);
+  }
+  g.fillStyle = PALETTE.dash;
+  for (const x of city.vRoads) {
+    if (x < x0 || x > x1) continue;
+    for (let y = 14; y < WORLD_H; y += 58) g.fillRect(x - 2, y, 4, 27);
+  }
+  for (const y of city.hRoads) {
+    if (y < y0 || y > y1) continue;
+    for (let x = 14; x < SHORE_X + 60; x += 58) g.fillRect(x, y - 2, 27, 4);
+  }
 
-  // Buildings (only those near the view).
+  // Buildings with a drop shadow, lit windows and the odd neon sign.
   for (const b of city.buildings) {
-    if (b.x + b.w < cam.x - 60 || b.x > cam.x + cam.w + 60 || b.y + b.h < cam.y - 60 || b.y > cam.y + cam.h + 60) continue;
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.fillRect(b.x + 6, b.y + 8, b.w, b.h);
-    ctx.fillStyle = b.color;
-    ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.fillStyle = 'rgba(255,255,255,0.10)';
-    ctx.fillRect(b.x, b.y, b.w, 5);
-    // Lit windows.
-    const cols = Math.max(2, Math.floor(b.w / 16)), rows = Math.max(2, Math.floor(b.h / 16));
+    if (b.x + b.w < x0 || b.x > x1 || b.y + b.h < y0 || b.y > y1) continue;
+    g.fillStyle = 'rgba(0,0,0,0.28)';
+    g.fillRect(b.x + 7, b.y + 9, b.w, b.h);
+    g.fillStyle = b.roof;
+    g.fillRect(b.x, b.y, b.w, b.h);
+    g.fillStyle = 'rgba(255,255,255,0.12)';
+    g.fillRect(b.x, b.y, b.w, 4);
+    const cols = Math.max(2, Math.floor(b.w / 17));
+    const rows = Math.max(2, Math.floor(b.h / 17));
+    g.fillStyle = 'rgba(255,213,120,0.8)';
     for (let i = 0; i < cols * rows; i++) {
-      if (!b.lit[i % b.lit.length]) continue;
-      const wx = b.x + 7 + (i % cols) * 15, wy = b.y + 8 + Math.floor(i / cols) * 15;
-      ctx.fillStyle = 'rgba(255, 214, 120, 0.75)';
-      ctx.fillRect(wx, wy, 6, 8);
+      if (!b.windows[i % b.windows.length]) continue;
+      g.fillRect(b.x + 7 + (i % cols) * 16, b.y + 9 + Math.floor(i / cols) * 16, 6, 8);
     }
     if (b.sign) {
-      ctx.font = 'bold 11px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = b.signColor;
-      ctx.shadowColor = b.signColor; ctx.shadowBlur = 9;
-      ctx.fillText(b.sign, b.x + b.w / 2, b.y + b.h / 2 + 4);
-      ctx.shadowBlur = 0;
+      g.font = 'bold 11px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.shadowColor = b.glow;
+      g.shadowBlur = 10;
+      g.fillStyle = b.glow;
+      g.fillText(b.sign, b.x + b.w / 2, b.y + b.h / 2 + 4);
+      g.shadowBlur = 0;
     }
   }
-  // Trees / palms.
+
+  // Trees and palms.
   for (const tr of city.trees) {
-    if (tr.x < cam.x - 40 || tr.x > cam.x + cam.w + 40 || tr.y < cam.y - 40 || tr.y > cam.y + cam.h + 40) continue;
-    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-    ctx.beginPath(); ctx.ellipse(tr.x + 4, tr.y + 6, tr.r, tr.r * 0.5, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = tr.palm ? '#3e9e57' : '#2e6b34';
-    ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.r, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.14)';
-    ctx.beginPath(); ctx.arc(tr.x - tr.r * 0.3, tr.y - tr.r * 0.3, tr.r * 0.5, 0, Math.PI * 2); ctx.fill();
+    if (tr.x < x0 || tr.x > x1 || tr.y < y0 || tr.y > y1) continue;
+    g.fillStyle = 'rgba(0,0,0,0.22)';
+    g.beginPath(); g.ellipse(tr.x + 4, tr.y + 6, tr.r, tr.r * 0.55, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = tr.palm ? '#43a45c' : '#2f6d35';
+    g.beginPath(); g.arc(tr.x, tr.y, tr.r, 0, Math.PI * 2); g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.15)';
+    g.beginPath(); g.arc(tr.x - tr.r * 0.32, tr.y - tr.r * 0.32, tr.r * 0.48, 0, Math.PI * 2); g.fill();
   }
 }
 
-export function drawCar(ctx, car, t) {
-  ctx.save();
-  ctx.translate(car.x, car.y);
-  ctx.rotate(car.angle);
+export function paintVehicle(g, car, t) {
+  g.save();
+  g.translate(car.x, car.y);
+  g.rotate(car.heading);
   const w = car.w, l = car.l;
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.fillRect(-w / 2 + 3, -l / 2 + 4, w, l);
-  ctx.fillStyle = car.paint;
-  ctx.beginPath(); ctx.roundRect(-w / 2, -l / 2, w, l, 5); ctx.fill();
-  ctx.fillStyle = 'rgba(15,20,28,0.9)';
-  ctx.beginPath(); ctx.roundRect(-w * 0.22, -l * 0.32, w * 0.44, l * 0.6, 3); ctx.fill();
-  ctx.fillStyle = 'rgba(180,220,255,0.5)';
-  ctx.fillRect(w * 0.28, -l * 0.3, w * 0.14, l * 0.6);
-  // Headlights + tail lights.
-  ctx.fillStyle = '#fff6bf';
-  ctx.fillRect(w / 2 - 3, -l / 2 + 2, 3, 4); ctx.fillRect(w / 2 - 3, l / 2 - 6, 3, 4);
-  ctx.fillStyle = '#ff4040';
-  ctx.fillRect(-w / 2, -l / 2 + 2, 3, 4); ctx.fillRect(-w / 2, l / 2 - 6, 3, 4);
+  g.fillStyle = 'rgba(0,0,0,0.32)';
+  g.beginPath(); g.roundRect(-w / 2 + 3, -l / 2 + 4, w, l, 5); g.fill();
+  g.fillStyle = car.cop ? '#eef1f5' : car.color;
+  g.beginPath(); g.roundRect(-w / 2, -l / 2, w, l, 5); g.fill();
   if (car.cop) {
-    ctx.fillStyle = '#e8ecf2';
-    ctx.fillRect(-w * 0.3, -l / 2, w * 0.6, l);
-    const flash = Math.sin(t * 14) > 0;
-    ctx.fillStyle = flash ? '#ff3b30' : '#2f6df6';
-    ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = flash ? '#2f6df6' : '#ff3b30';
-    ctx.beginPath(); ctx.arc(0, -7, 3.4, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(0, 7, 3.4, 0, Math.PI * 2); ctx.fill();
+    g.fillStyle = '#24344d';
+    g.fillRect(-w * 0.18, -l / 2, w * 0.36, l);
   }
-  if (car.kind && car.kind.name === 'TAXI') {
-    ctx.fillStyle = '#14181f';
-    ctx.fillRect(-6, -4, 12, 8);
-    ctx.fillStyle = '#ffd23f';
-    ctx.font = 'bold 7px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText('TAXI', 0, 2.5);
+  // Cabin glass.
+  g.fillStyle = 'rgba(13,19,27,0.92)';
+  g.beginPath(); g.roundRect(-w * 0.2, -l * 0.34, w * 0.46, l * 0.64, 3); g.fill();
+  g.fillStyle = 'rgba(175,218,255,0.45)';
+  g.fillRect(w * 0.3, -l * 0.3, w * 0.12, l * 0.58);
+  // Lights.
+  g.fillStyle = '#fff3b0';
+  g.fillRect(w / 2 - 3, -l / 2 + 2, 3, 4);
+  g.fillRect(w / 2 - 3, l / 2 - 6, 3, 4);
+  g.fillStyle = '#ff4545';
+  g.fillRect(-w / 2, -l / 2 + 2, 3, 4);
+  g.fillRect(-w / 2, l / 2 - 6, 3, 4);
+  if (car.cop) {
+    const phase = Math.sin(t * 15) > 0;
+    g.fillStyle = phase ? PALETTE.lightRed : PALETTE.lightBlue;
+    g.beginPath(); g.arc(0, 0, 5.6, 0, Math.PI * 2); g.fill();
+    g.fillStyle = phase ? PALETTE.lightBlue : PALETTE.lightRed;
+    g.beginPath(); g.arc(0, -7.5, 3.4, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(0, 7.5, 3.4, 0, Math.PI * 2); g.fill();
   }
-  ctx.restore();
-  if (car.honk > 0) {
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText('!', car.x + 16, car.y - 14);
+  if (car.type === 'taxi') {
+    g.fillStyle = '#14181f';
+    g.fillRect(-6, -4.5, 12, 9);
+    g.fillStyle = '#ffd23f';
+    g.font = 'bold 6.5px system-ui';
+    g.textAlign = 'center';
+    g.fillText('TAXI', 0, 2.2);
+  }
+  g.restore();
+  if (car.honkT > 0) {
+    g.fillStyle = 'rgba(255,255,255,0.9)';
+    g.font = 'bold 13px system-ui';
+    g.textAlign = 'center';
+    g.fillText('!', car.x + 17, car.y - 13);
   }
 }
 
-export function drawPed(ctx, p) {
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.beginPath(); ctx.ellipse(p.x + 2, p.y + 4, 7, 3.4, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = p.shirt;
-  ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#e8c39e';
-  ctx.beginPath(); ctx.arc(p.x, p.y - 1, 3.6, 0, Math.PI * 2); ctx.fill();
-  if (p.panic > 0) {
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText('!', p.x + 9, p.y - 8);
+export function paintPed(g, p) {
+  if (p.downT > 0.35) return; // flat on the ground, mostly out of frame
+  g.fillStyle = 'rgba(0,0,0,0.25)';
+  g.beginPath(); g.ellipse(p.x + 2, p.y + 4, 7, 3.4, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = p.top;
+  g.beginPath(); g.arc(p.x, p.y, 7, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#ecc39c';
+  g.beginPath(); g.arc(p.x, p.y - 1, 3.5, 0, Math.PI * 2); g.fill();
+  if (p.fleeT > 0) {
+    g.fillStyle = '#ffffff';
+    g.font = 'bold 12px system-ui';
+    g.textAlign = 'center';
+    g.fillText('!', p.x + 10, p.y - 8);
   }
 }
 
-export function drawMarker(ctx, target, color, label, t) {
-  const bob = Math.sin(t * 4) * 5;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.arc(target.x, target.y, 30 + Math.sin(t * 4) * 4, 0, Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(target.x, target.y - 44 + bob);
-  ctx.lineTo(target.x - 11, target.y - 66 + bob);
-  ctx.lineTo(target.x + 11, target.y - 66 + bob);
-  ctx.closePath(); ctx.fill();
-  ctx.font = 'bold 12px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(label, target.x, target.y - 74 + bob);
+export function paintGoal(g, goal, color, label, t) {
+  const pulse = 30 + Math.sin(t * 4.2) * 4.5;
+  const bob = Math.sin(t * 4.2) * 5;
+  g.strokeStyle = color;
+  g.lineWidth = 3;
+  g.beginPath(); g.arc(goal.x, goal.y, pulse, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = color;
+  g.beginPath();
+  g.moveTo(goal.x, goal.y - 42 + bob);
+  g.lineTo(goal.x - 11, goal.y - 65 + bob);
+  g.lineTo(goal.x + 11, goal.y - 65 + bob);
+  g.closePath(); g.fill();
+  g.font = 'bold 12px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.fillText(label, goal.x, goal.y - 73 + bob);
 }
-
-export { districtAt };

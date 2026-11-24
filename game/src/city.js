@@ -1,90 +1,105 @@
-// NEON BAY HEAT 2 — city generation.
-// One job: turn a seed into the static world — road grid, city blocks with
-// buildings and neon signs, palm trees, the beach and the water, plus the
-// four named districts the HUD and minimap label.
+// NEON BAY HEAT 2 — the city itself.
+// Builds the static world from a seed: a grid of avenues, a building (or
+// a small cluster) inside every block, scattered palms, and the beach
+// strip down the eastern edge. Also owns the district map and the
+// building-collision solver every moving thing uses.
 
-import { WORLD } from './config.js';
-import { makeRng, pick, range, intRange } from './random.js';
+import { WORLD_W, WORLD_H, GRID, ROAD_W, SHORE_X } from './config.js';
+import { rngFrom, between, whole, choose, chance } from './random.js';
 
-const BUILDING_COLORS = ['#5b6b7f', '#6e5a7e', '#7a6248', '#4f7267', '#74565e', '#556270', '#6b7a56', '#7e6a4f'];
-const NEON = ['#ff2e88', '#22d3ee', '#facc15', '#a3e635', '#fb7185', '#38bdf8'];
-const SIGNS = ['HOTEL', 'BAR', 'DINER', 'CLUB NOVA', 'PIZZA', 'LIQUOR', 'TATTOO', 'MOTEL', 'CASINO', 'GYM', 'PAWN', '24H'];
+const ROOFS = ['#5d6a7a', '#71607c', '#77644c', '#51755f', '#6d5560', '#5a6e56', '#7c6a50', '#4f6274'];
+const GLOWS = ['#ff2e88', '#22d3ee', '#facc15', '#a3e635', '#fb7185', '#38bdf8', '#f472b6'];
+const SIGNS = ['HOTEL', 'BAR', 'DINER', 'CLUB NOVA', 'PIZZA', 'LIQUOR', 'TATTOO', 'MOTEL', 'CASINO', 'GYM', 'PAWN SHOP', '24H STORE', 'RAMEN', 'ARCADE'];
 
 export const DISTRICTS = [
-  { name: 'DOWNTOWN', x: 200, y: 200, w: 1200, h: 900 },
-  { name: 'NEON BAY', x: 1500, y: 200, w: 1100, h: 900 },
-  { name: 'PORTSIDE', x: 200, y: 1200, w: 1200, h: 1000 },
-  { name: 'PALM HEIGHTS', x: 1500, y: 1200, w: 1150, h: 1000 },
+  { name: 'OLD TOWN', x0: 0, y0: 0, x1: 1680, y1: 1260 },
+  { name: 'NEON BAY', x0: 1680, y0: 0, x1: SHORE_X, y1: 1260 },
+  { name: 'THE DOCKS', x0: 0, y0: 1260, x1: 1680, y1: WORLD_H },
+  { name: 'PALM HEIGHTS', x0: 1680, y0: 1260, x1: SHORE_X, y1: WORLD_H },
 ];
 
-export function districtAt(x, y) {
+export function districtName(x, y) {
+  if (x >= SHORE_X) return 'NEON BEACH';
   for (const d of DISTRICTS) {
-    if (x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h) return d.name;
+    if (x >= d.x0 && x < d.x1 && y >= d.y0 && y < d.y1) return d.name;
   }
-  return x >= WORLD.beachX ? 'NEON BEACH' : 'DOWNTOWN';
+  return 'OLD TOWN';
 }
 
-export function buildCity(seed) {
-  const rng = makeRng(seed);
-  const { width, height, block, beachX } = WORLD;
+export function generateCity(seed) {
+  const rng = rngFrom(seed * 7919 + 13);
+  const vRoads = [];
+  const hRoads = [];
+  for (let x = GRID / 2; x < SHORE_X; x += GRID) vRoads.push(x);
+  for (let y = GRID / 2; y < WORLD_H; y += GRID) hRoads.push(y);
+
   const buildings = [];
   const trees = [];
 
-  // Blocks sit between the roads; each block holds 1-4 buildings.
-  for (let bx = block / 2; bx < beachX - 80; bx += block) {
-    for (let by = block / 2; by < height - 60; by += block) {
-      const cx = bx + block / 2, cy = by + block / 2;
-      const n = intRange(rng, 1, 3);
-      for (let i = 0; i < n; i++) {
-        const w = range(rng, 52, 92), h = range(rng, 52, 92);
-        const x = cx + range(rng, -38, 38) - w / 2;
-        const y = cy + range(rng, -38, 38) - h / 2;
+  // Blocks are the squares BETWEEN road centrelines: their centres sit a
+  // full GRID from each centreline, and building size + jitter are capped
+  // so no wall ever leans into the asphalt (centreline ± 46 keep-out).
+  for (let cellX = GRID; cellX < SHORE_X; cellX += GRID) {
+    for (let cellY = GRID; cellY < WORLD_H; cellY += GRID) {
+      const count = whole(rng, 1, 3);
+      for (let i = 0; i < count; i++) {
+        const w = between(rng, 50, 88);
+        const h = between(rng, 50, 88);
+        const bx = cellX + between(rng, -26, 26) - w / 2;
+        const by = cellY + between(rng, -26, 26) - h / 2;
         buildings.push({
-          x, y, w, h,
-          color: pick(rng, BUILDING_COLORS),
-          floors: intRange(rng, 2, 9),
-          sign: rng() < 0.42 ? pick(rng, SIGNS) : null,
-          signColor: pick(rng, NEON),
-          lit: Array.from({ length: 12 }, () => rng() < 0.55),
+          x: bx, y: by, w, h,
+          roof: choose(rng, ROOFS),
+          sign: chance(rng, 0.4) ? choose(rng, SIGNS) : null,
+          glow: choose(rng, GLOWS),
+          windows: Array.from({ length: 14 }, () => chance(rng, 0.55)),
         });
       }
-      if (rng() < 0.7) {
-        trees.push({ x: cx + range(rng, -70, 70), y: cy + range(rng, -70, 70), r: range(rng, 9, 15) });
+      if (chance(rng, 0.65)) {
+        trees.push({ x: cellX + between(rng, -62, 62), y: cellY + between(rng, -62, 62), r: between(rng, 9, 15), palm: false });
       }
     }
   }
-  // Palms line the beach.
-  for (let y = 60; y < height - 40; y += range(rng, 90, 160)) {
-    trees.push({ x: beachX + range(rng, 26, 90), y, r: range(rng, 10, 16), palm: true });
+  // Palms march down the sand.
+  for (let y = 70; y < WORLD_H - 50; y += between(rng, 95, 170)) {
+    trees.push({ x: SHORE_X + between(rng, 30, 110), y, r: between(rng, 10, 16), palm: true });
   }
-
-  // Road centre-lines for traffic: verticals and horizontals.
-  const vRoads = [], hRoads = [];
-  for (let x = block; x < beachX; x += block) vRoads.push(x);
-  for (let y = block; y < height; y += block) hRoads.push(y);
-
-  return { buildings, trees, vRoads, hRoads, seed };
+  return { buildings, trees, vRoads, hRoads };
 }
 
-// Is a point inside any building? (collision + spawn checks)
-export function hitsBuilding(city, x, y, pad = 0) {
+// Push a circle (x, y, r) out of every building it overlaps; mutates the
+// passed object {x, y} and returns true if any push happened.
+export function resolveBuildingHit(city, pos, r) {
+  let pushed = false;
   for (const b of city.buildings) {
-    if (x > b.x - pad && x < b.x + b.w + pad && y > b.y - pad && y < b.y + b.h + pad) return b;
+    const nearX = Math.max(b.x, Math.min(pos.x, b.x + b.w));
+    const nearY = Math.max(b.y, Math.min(pos.y, b.y + b.h));
+    const dx = pos.x - nearX;
+    const dy = pos.y - nearY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 >= r * r) continue;
+    pushed = true;
+    if (d2 > 0.0001) {
+      const d = Math.sqrt(d2);
+      pos.x = nearX + (dx / d) * r;
+      pos.y = nearY + (dy / d) * r;
+    } else {
+      // Centre is inside the box: leave by the shortest side.
+      const left = pos.x - b.x, right = b.x + b.w - pos.x;
+      const top = pos.y - b.y, bottom = b.y + b.h - pos.y;
+      const m = Math.min(left, right, top, bottom);
+      if (m === left) pos.x = b.x - r;
+      else if (m === right) pos.x = b.x + b.w + r;
+      else if (m === top) pos.y = b.y - r;
+      else pos.y = b.y + b.h + r;
+    }
   }
-  return null;
+  return pushed;
 }
 
-// Snap a point out of a building along the smaller penetration axis.
-export function pushOut(city, p, radius) {
-  const b = hitsBuilding(city, p.x, p.y, radius * 0.4);
-  if (!b) return;
-  const left = Math.abs(p.x - (b.x - radius));
-  const right = Math.abs(p.x - (b.x + b.w + radius));
-  const top = Math.abs(p.y - (b.y - radius));
-  const bottom = Math.abs(p.y - (b.y + b.h + radius));
-  const m = Math.min(left, right, top, bottom);
-  if (m === left) p.x = b.x - radius;
-  else if (m === right) p.x = b.x + b.w + radius;
-  else if (m === top) p.y = b.y - radius;
-  else p.y = b.y + b.h + radius;
+export function insideBuilding(city, x, y) {
+  for (const b of city.buildings) {
+    if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) return true;
+  }
+  return false;
 }

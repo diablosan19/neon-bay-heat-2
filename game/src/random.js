@@ -1,25 +1,31 @@
-// NEON BAY HEAT 2 — deterministic seeded RNG (mulberry32).
-// One job: the same seed always builds the same city, so screenshots and
-// saves are reproducible.
+// NEON BAY HEAT 2 — deterministic randomness.
+// A splitmix-style generator: fast, seedable, and good enough that the
+// same seed always grows the same city, traffic and crowd.
 
-export function makeRng(seed) {
-  let a = seed >>> 0;
-  return function rng() {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+export function rngFrom(seed) {
+  let state = (seed >>> 0) || 1;
+  return function next() {
+    state = (state + 0x9e3779b9) >>> 0;
+    let z = state;
+    z = Math.imul(z ^ (z >>> 16), 0x21f0aaad);
+    z = Math.imul(z ^ (z >>> 15), 0x735a2d97);
+    z = (z ^ (z >>> 15)) >>> 0;
+    return z / 4294967296;
   };
 }
 
-export function pick(rng, arr) {
-  return arr[Math.floor(rng() * arr.length)];
-}
-
-export function range(rng, lo, hi) {
+export function between(rng, lo, hi) {
   return lo + rng() * (hi - lo);
 }
 
-export function intRange(rng, lo, hi) {
-  return Math.floor(range(rng, lo, hi + 1));
+export function whole(rng, lo, hi) {
+  return Math.floor(between(rng, lo, hi + 1));
+}
+
+export function choose(rng, list) {
+  return list[Math.floor(rng() * list.length) % list.length];
+}
+
+export function chance(rng, p) {
+  return rng() < p;
 }

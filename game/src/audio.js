@@ -1,49 +1,71 @@
-// NEON BAY HEAT 2 — WebAudio synth sound, no audio files.
-// One job: engine hum, sirens, horns, pickup chimes and the bust sting,
-// all synthesized from oscillators.
+// NEON BAY HEAT 2 — synthesized sound.
+// No audio assets: an oscillator pair for the engine, a wailing triangle
+// for sirens, and short blips for game events. Everything fails silent if
+// the browser refuses an AudioContext.
 
-export function makeAudio() {
-  let ctx = null, engine = null, engineGain = null, siren = null, sirenGain = null;
-  function ensure() {
-    if (ctx) return true;
+export function createSound() {
+  let ac = null;
+  let engineOsc = null, engineAmp = null, sirenOsc = null, sirenAmp = null;
+
+  function boot() {
+    if (ac) return true;
     try {
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-      engine = ctx.createOscillator(); engine.type = 'sawtooth'; engine.frequency.value = 55;
-      engineGain = ctx.createGain(); engineGain.gain.value = 0;
-      engine.connect(engineGain).connect(ctx.destination); engine.start();
-      siren = ctx.createOscillator(); siren.type = 'triangle'; siren.frequency.value = 700;
-      sirenGain = ctx.createGain(); sirenGain.gain.value = 0;
-      siren.connect(sirenGain).connect(ctx.destination); siren.start();
-    } catch { ctx = null; }
-    return !!ctx;
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      engineOsc = ac.createOscillator();
+      engineOsc.type = 'sawtooth';
+      engineOsc.frequency.value = 52;
+      engineAmp = ac.createGain();
+      engineAmp.gain.value = 0;
+      engineOsc.connect(engineAmp).connect(ac.destination);
+      engineOsc.start();
+      sirenOsc = ac.createOscillator();
+      sirenOsc.type = 'triangle';
+      sirenOsc.frequency.value = 720;
+      sirenAmp = ac.createGain();
+      sirenAmp.gain.value = 0;
+      sirenOsc.connect(sirenAmp).connect(ac.destination);
+      sirenOsc.start();
+    } catch {
+      ac = null;
+    }
+    return !!ac;
   }
-  function blip(freq, dur, type = 'square', vol = 0.12, slide = 0) {
-    if (!ensure()) return;
-    const o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = type; o.frequency.value = freq;
-    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), ctx.currentTime + dur);
-    g.gain.setValueAtTime(vol, ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-    o.connect(g).connect(ctx.destination);
-    o.start(); o.stop(ctx.currentTime + dur);
+
+  function tone(freq, dur, type, vol, glideTo) {
+    if (!boot()) return;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = type || 'square';
+    o.frequency.setValueAtTime(freq, ac.currentTime);
+    if (glideTo) o.frequency.exponentialRampToValueAtTime(Math.max(28, glideTo), ac.currentTime + dur);
+    g.gain.setValueAtTime(vol || 0.1, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    o.connect(g).connect(ac.destination);
+    o.start();
+    o.stop(ac.currentTime + dur);
   }
+
   return {
-    unlock() { ensure(); if (ctx && ctx.state === 'suspended') ctx.resume(); },
-    engine(speedRatio, inCar) {
-      if (!ctx) return;
-      engineGain.gain.value = inCar ? 0.03 + Math.abs(speedRatio) * 0.05 : 0;
-      engine.frequency.value = 50 + Math.abs(speedRatio) * 130;
+    unlock() { if (boot() && ac.state === 'suspended') ac.resume(); },
+    engine(ratio, driving) {
+      if (!ac) return;
+      engineAmp.gain.value = driving ? 0.028 + Math.abs(ratio) * 0.05 : 0;
+      engineOsc.frequency.value = 48 + Math.abs(ratio) * 135;
     },
-    siren(on, t) {
-      if (!ctx) return;
-      sirenGain.gain.value = on ? 0.016 : 0;
-      if (on) siren.frequency.value = 700 + Math.sin(t * 5.2) * 190;
+    siren(active, t) {
+      if (!ac) return;
+      sirenAmp.gain.value = active ? 0.015 : 0;
+      if (active) sirenOsc.frequency.value = 715 + Math.sin(t * 5.4) * 185;
     },
-    honk() { blip(220, 0.16, 'square', 0.06); },
-    pickup() { blip(660, 0.1, 'sine', 0.14); setTimeout(() => blip(990, 0.14, 'sine', 0.14), 70); },
-    cash() { blip(880, 0.09, 'triangle', 0.15); setTimeout(() => blip(1320, 0.16, 'triangle', 0.15), 60); },
-    crash() { blip(120, 0.22, 'sawtooth', 0.16, -70); },
-    busted() { blip(392, 0.2, 'square', 0.14); setTimeout(() => blip(311, 0.2, 'square', 0.14), 160); setTimeout(() => blip(233, 0.42, 'square', 0.14), 320); },
-    star() { blip(1180, 0.1, 'square', 0.1); },
+    horn() { tone(196, 0.15, 'square', 0.055); },
+    grab() { tone(659, 0.09, 'sine', 0.13); setTimeout(() => tone(988, 0.13, 'sine', 0.13), 65); },
+    paid() { tone(880, 0.08, 'triangle', 0.14); setTimeout(() => tone(1318, 0.15, 'triangle', 0.14), 55); },
+    thud() { tone(115, 0.2, 'sawtooth', 0.15, 55); },
+    alarm() { tone(1175, 0.09, 'square', 0.09); },
+    bustedJingle() {
+      tone(392, 0.18, 'square', 0.13);
+      setTimeout(() => tone(311, 0.18, 'square', 0.13), 150);
+      setTimeout(() => tone(233, 0.4, 'square', 0.13), 300);
+    },
   };
 }

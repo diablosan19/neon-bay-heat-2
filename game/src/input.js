@@ -1,30 +1,32 @@
-// NEON BAY HEAT 2 — keyboard input.
-// One job: track which keys are down and expose one-shot presses.
+// NEON BAY HEAT 2 — keyboard handling.
+// Tracks held keys for continuous movement and a per-frame set of fresh
+// presses for one-shot actions (enter car, pause, confirm). The main loop
+// calls clearPresses() once it has consumed them.
 
-const down = new Set();
-const pressed = new Set();
+const held = new Set();
+const fresh = new Set();
+let listening = false;
 
-export function initInput() {
-  addEventListener('keydown', (e) => {
-    if (!down.has(e.code)) pressed.add(e.code);
-    down.add(e.code);
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+export function initKeyboard() {
+  if (listening) return;
+  listening = true;
+  addEventListener('keydown', (ev) => {
+    if (!ev.repeat) fresh.add(ev.code);
+    held.add(ev.code);
+    if (ev.code.startsWith('Arrow') || ev.code === 'Space') ev.preventDefault();
   });
-  addEventListener('keyup', (e) => down.delete(e.code));
-  addEventListener('blur', () => { down.clear(); });
+  addEventListener('keyup', (ev) => held.delete(ev.code));
+  addEventListener('blur', () => { held.clear(); fresh.clear(); });
 }
 
-export function isDown(...codes) {
-  return codes.some((c) => down.has(c));
+export function down(...codes) {
+  return codes.some((c) => held.has(c));
 }
 
-export function wasPressed(...codes) {
-  for (const c of codes) {
-    if (pressed.has(c)) { pressed.delete(c); return true; }
-  }
-  return false;
+export function tapped(...codes) {
+  return codes.some((c) => fresh.has(c));
 }
 
-export function endFrame() {
-  pressed.clear();
+export function clearPresses() {
+  fresh.clear();
 }
