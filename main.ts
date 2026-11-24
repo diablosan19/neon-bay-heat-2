@@ -1,12 +1,13 @@
-// A working gta6-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. Only the plumbing, not an open world: Block
-// Dodger, a plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a
-// title screen, score, lives and levels, game over and restart, flat colours and no sound. Build
-// your own open-world crime game in its place (three.js or any library you vendor under game/),
-// put your 3 or 4 PNG or JPEG screenshots in screenshots/ (the first by name is the cover) and run it.
+// NEON BAY HEAT 2 — a working gta6-01 entry (Node 22, standard library only).
+// The game is this directory's game/ folder: NEON BAY HEAT 2, a top-down
+// open-world crime game (seeded city with four districts and a beach, traffic
+// AI, pedestrians, car stealing, a 5-star wanted system with police chases
+// and a bust meter, DELIVER and GETAWAY missions, a mayhem combo, synth
+// sound, minimap HUD, pause + save) written as plain static files a desktop
+// browser loads offline — no library, no network request. This program hands
+// it in: it copies game/ and screenshots/ from beside this file to /output
+// and writes /output/dossier.json, the summary the judge reads, with the
+// vendored make.fun library.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
@@ -21,6 +22,19 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 mkdirSync(out, { recursive: true });
+
+// NEON BAY HEAT 2 entry check: the dossier must carry the game's real
+// screenshots (title, chase, city, mission) — refuse to hand in an entry
+// whose screenshot set is missing, so a broken build never reaches the judge.
+import { readdirSync } from 'node:fs';
+const shots = existsSync(join(here, 'screenshots'))
+  ? readdirSync(join(here, 'screenshots')).filter((f) => /\.(png|jpe?g)$/i.test(f))
+  : [];
+if (shots.length < 3) {
+  throw new Error(`NEON BAY HEAT 2: expected at least 3 screenshots, found ${shots.length}`);
+}
+console.log(`NEON BAY HEAT 2: handing in ${shots.length} screenshots: ${shots.sort().join(', ')}`);
+
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
 if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
