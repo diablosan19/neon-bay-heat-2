@@ -1,62 +1,61 @@
-// NEON BAY HEAT 2 — pedestrians.
-// Beachgoers and sidewalk wanderers. They amble between waypoints, and
-// when a fast car gets close they bolt directly away from it — the scare
-// is worth mayhem points, running one down is a crime (handled in main).
+// NEON BAY HEAT 2 — the crowd.
+// Pedestrians amble along block edges and across the sand. A fast car
+// nearby sends them sprinting away from it; a car that actually reaches
+// one knocks them down for a few seconds (the main loop scores that).
 
-import { WORLD_W, WORLD_H, SHORE_X } from './config.js';
-import { rngFrom, between, choose } from './random.js';
-import { resolveBuildingHit } from './city.js';
+import { WORLD_W, WORLD_H, BEACH_X } from './config.js';
+import { rng32, between, pick } from './random.js';
+import { pushOutOfBuildings } from './city.js';
 
-const TOPS = ['#e8e3d9', '#c94f4f', '#4f79c9', '#53a06a', '#d9a441', '#9a6bc9', '#4fb3bf', '#e2731d', '#e87ea1'];
+const SKIN = ['#e8b98d', '#c98d5f', '#8a5a3b', '#f0cfa8'];
+const TOPS = ['#d95f4b', '#4b7ad9', '#53a06a', '#d9a441', '#9a6bc9', '#4fb3bf', '#e8e3d9'];
 
-export function spawnCrowd(seed, count = 44) {
-  const rng = rngFrom(seed * 131 + 29);
+export function seedCrowd(seed, count = 44) {
+  const rng = rng32(seed * 131 + 3);
   const crowd = [];
   for (let i = 0; i < count; i++) {
-    const beach = rng() < 0.16;
+    const onSand = rng() < 0.16;
     crowd.push({
-      x: beach ? between(rng, SHORE_X + 24, WORLD_W - 50) : between(rng, 70, SHORE_X - 60),
+      x: onSand ? between(rng, BEACH_X + 24, WORLD_W - 50) : between(rng, 70, BEACH_X - 50),
       y: between(rng, 70, WORLD_H - 70),
       heading: between(rng, 0, Math.PI * 2),
-      pace: between(rng, 36, 64),
-      top: choose(rng, TOPS),
-      fleeT: 0,
-      thinkT: between(rng, 0.5, 4),
-      downT: 0,
-      beach,
+      pace: between(rng, 30, 58),
+      skin: pick(rng, SKIN), top: pick(rng, TOPS),
+      panic: 0, downT: 0, think: between(rng, 1, 5),
+      sand: onSand, phase: between(rng, 0, 6),
     });
   }
   return crowd;
 }
 
-// threats: fast-moving cars [{x, y, speed}]. onFlee(ped) fires once per scare.
-export function stepCrowd(crowd, dt, city, threats, onFlee) {
+// threats: [{x, y, speed}] of fast-moving cars. onScare(ped) is called
+// the moment a pedestrian bolts — the caller decides whether the player
+// caused it. The callback is optional and always guarded.
+export function stepCrowd(crowd, dt, city, threats, onScare) {
   for (const p of crowd) {
     if (p.downT > 0) { p.downT -= dt; continue; }
-    p.thinkT -= dt;
-    if (p.thinkT <= 0) {
-      p.heading += between(Math.random, -1.3, 1.3);
-      p.thinkT = between(Math.random, 1.2, 4.5);
+    p.think -= dt;
+    if (p.think <= 0) {
+      p.heading += between(Math.random, -1.1, 1.1);
+      p.think = between(Math.random, 1.5, 5);
     }
+    p.panic = Math.max(0, p.panic - dt);
     let speed = p.pace;
-    let fleeing = false;
     for (const t of threats) {
       const dx = p.x - t.x, dy = p.y - t.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < 128 * 128 && t.speed > 128) {
-        if (p.fleeT <= 0 && typeof onFlee === 'function') onFlee(p);
-        p.fleeT = 1.3;
+      if (dx * dx + dy * dy < 135 * 135 && t.speed > 125) {
+        if (p.panic <= 0 && typeof onScare === 'function') onScare(p);
+        p.panic = 1.3;
         p.heading = Math.atan2(dy, dx);
-        fleeing = true;
+        speed = 238;
         break;
       }
     }
-    if (fleeing) speed = 238;
-    p.fleeT = Math.max(0, p.fleeT - dt);
+    p.phase += dt * (speed > 100 ? 13 : 7);
     p.x += Math.cos(p.heading) * speed * dt;
     p.y += Math.sin(p.heading) * speed * dt;
     p.x = Math.max(14, Math.min(WORLD_W - 14, p.x));
     p.y = Math.max(14, Math.min(WORLD_H - 14, p.y));
-    if (!p.beach) resolveBuildingHit(city, p, 9);
+    if (!p.sand) pushOutOfBuildings(city, p, 10);
   }
 }

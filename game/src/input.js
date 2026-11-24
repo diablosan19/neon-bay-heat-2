@@ -1,32 +1,28 @@
-// NEON BAY HEAT 2 — keyboard handling.
-// Tracks held keys for continuous movement and a per-frame set of fresh
-// presses for one-shot actions (enter car, pause, confirm). The main loop
-// calls clearPresses() once it has consumed them.
+// NEON BAY HEAT 2 — keyboard state.
+// held() answers "is it down right now", hit() answers "did it go down
+// this frame" and is consumed by the main loop once per frame.
 
 const held = new Set();
 const fresh = new Set();
-let listening = false;
 
-export function initKeyboard() {
-  if (listening) return;
-  listening = true;
-  addEventListener('keydown', (ev) => {
-    if (!ev.repeat) fresh.add(ev.code);
-    held.add(ev.code);
-    if (ev.code.startsWith('Arrow') || ev.code === 'Space') ev.preventDefault();
+export function bindKeyboard() {
+  addEventListener('keydown', (e) => {
+    if (!held.has(e.code)) fresh.add(e.code);
+    held.add(e.code);
+    if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
   });
-  addEventListener('keyup', (ev) => held.delete(ev.code));
+  addEventListener('keyup', (e) => held.delete(e.code));
   addEventListener('blur', () => { held.clear(); fresh.clear(); });
 }
 
-export function down(...codes) {
+export function heldKey(...codes) {
   return codes.some((c) => held.has(c));
 }
 
-export function tapped(...codes) {
+export function hitKey(...codes) {
   return codes.some((c) => fresh.has(c));
 }
 
-export function clearPresses() {
+export function frameDone() {
   fresh.clear();
 }

@@ -1,63 +1,62 @@
-// NEON BAY HEAT 2 — shared tuning for every module.
-// All numbers that more than one file needs are gathered here so the
-// balance of the game can be adjusted from a single place.
+// NEON BAY HEAT 2 — tuning constants shared by every module.
+// One place for the numbers, so balancing never means hunting files.
 
 export const VIEW_W = 1280;
 export const VIEW_H = 800;
 
-export const WORLD_W = 3360;
-export const WORLD_H = 2520;
-export const GRID = 240;          // distance between neighbouring road centrelines
-export const ROAD_W = 64;         // full asphalt width
-export const SHORE_X = 2920;      // sand starts here; water beyond WORLD edge + margin
+// World geometry: a grid city of square blocks, beach on the east edge.
+export const WORLD_W = 3200;
+export const WORLD_H = 2400;
+export const PITCH = 260;        // spacing between road centrelines
+export const ROAD_W = 74;        // asphalt width, kerb to kerb
+export const LANE = ROAD_W / 4;  // right-hand lane offset from a centreline
+export const BEACH_X = 2790;     // east of this the turf gives way to sand
 
-export const FOOT = {
-  speed: 178,
-  sprintMul: 1.5,
+export const WALK = {
+  speed: 172,
+  sprint: 1.5,
   radius: 11,
 };
 
-export const DRIVE = {
-  engine: 395,        // px/s^2 of throttle force
-  brake: 640,
-  reverseTop: 138,
-  drag: 0.55,         // 1/s velocity bleed with no throttle
-  rollDrag: 1.9,      // extra bleed while coasting
-  steerRate: 2.65,    // rad/s at full lock, scaled by speed factor
-  lateralGrip: 9.5,   // how hard sideways slide is killed each second
-  hitRadius: 17,
+export const CAR_PHYS = {
+  grip: 8.0,          // lateral velocity killed per second
+  dragK: 0.35,        // quadratic-ish top-speed shaping
+  brake: 620,
+  reverseMax: 135,
+  steerMax: 0.62,     // rad of front-wheel angle at full lock
+  wheelbase: 52,
+  crashR: 18,
 };
 
-export const HEAT = {
-  starCap: 5,
-  coolTime: 13,       // seconds out of sight to shed one star
-  viewDist: 470,      // how far a cruiser can spot the player
-  bustSeconds: 2.4,   // pinned-and-slow time that ends the run
-  bustRange: 74,
+export const LAW = {
+  maxStars: 5,
+  sightR: 480,        // cruiser visual range on the player
+  loseTime: 12,       // unseen seconds to shed one star
+  bustR: 78,          // cruisers inside this ring can bust a slow player
+  bustFill: 2.3,      // seconds pinned before the bust lands
+  slowUnder: 42,      // player speed below which a bust can fill
 };
 
-export const PAY = {
-  deliver: [170, 330],
-  getaway: [290, 540],
-  secondsPerPixel: 0.052,
-  minSeconds: 26,
+export const JOB_PAY = {
+  deliverMin: 160, deliverMax: 320,
+  getawayMin: 280, getawayMax: 520,
+  secPerPx: 0.05, minClock: 25,
 };
 
-export const PALETTE = {
-  sea: '#0b3552',
-  seaLight: '#12506e',
-  sand: '#dec084',
-  sandDark: '#cda964',
-  turf: '#437c46',
-  turfDark: '#39693c',
-  asphalt: '#2e3138',
-  asphaltEdge: '#22252b',
-  kerb: '#9aa0a6',
-  dash: '#f0c93e',
-  roofA: '#66707e',
-  you: '#ffd23f',
-  copBody: '#eef1f5',
-  copTrim: '#24344d',
-  lightRed: '#ff4040',
-  lightBlue: '#3f8cff',
+export const COL = {
+  sea: '#0a3a56',
+  seaFoam: '#17607f',
+  sand: '#dfc286',
+  sandWet: '#cdb077',
+  lawn: '#47824a',
+  lawnAlt: '#407843',
+  road: '#2f3237',
+  roadEdge: '#23262b',
+  kerb: '#a7adb3',
+  dash: '#eec93c',
+  playerBody: '#ffd23f',
+  copPaint: '#edf0f4',
+  copStripe: '#22334e',
+  lampR: '#ff3f3f',
+  lampB: '#3f8cff',
 };

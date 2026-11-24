@@ -1,98 +1,96 @@
-// NEON BAY HEAT 2 — the game itself.
-// Owns the world state and the frame loop, and wires the modules
-// together: walking and driving, stealing, collisions and mayhem, the
-// crowd, the police, jobs, sound, the camera, saving, and the composed
-// ?shot= scenes the entry screenshots are taken from.
+// NEON BAY HEAT 2 — the game.
+// Owns the state and the frame loop and stitches the modules together:
+// the player on foot and behind wheels, theft, shunts and mayhem, the
+// crowd, the law, the jobs, sound, camera, saving — and the composed
+// ?shot= scenes the entry screenshots are framed from.
 
-import { VIEW_W, VIEW_H, WORLD_W, WORLD_H, FOOT } from './config.js';
-import { generateCity, resolveBuildingHit, districtName } from './city.js';
-import { initKeyboard, down, tapped, clearPresses } from './input.js';
-import { makeVehicle, stepVehicle, forwardSpeed, spawnTraffic, driveTraffic, overlap } from './vehicles.js';
-import { spawnCrowd, stepCrowd } from './peds.js';
-import { newPolice, addHeat, stepPolice, bustFine } from './police.js';
+import { VIEW_W, VIEW_H, WORLD_W, WORLD_H, WALK, COL } from './config.js';
+import { buildCity, pushOutOfBuildings } from './city.js';
+import { bindKeyboard, heldKey, hitKey, frameDone } from './input.js';
+import { makeCar, driveCar, speedAlong, seedTraffic, stepTraffic, carOverlap } from './vehicles.js';
+import { seedCrowd, stepCrowd } from './peds.js';
+import { newLaw, addHeat, stepLaw, settleBust } from './police.js';
 import { newJobs, stepJobs, addMayhem } from './missions.js';
-import { createSound } from './audio.js';
-import { paintWorld, paintVehicle, paintPed, paintGoal } from './render.js';
+import { createAudio } from './audio.js';
+import { paintWorld, paintCar, paintPed, paintGoal } from './render.js';
 import { paintHud, paintTitle, paintBusted, paintPaused } from './hud.js';
 
-const query = new URLSearchParams(location.search);
-const SEED = parseInt(query.get('seed') || '7', 10) || 7;
-const SHOT = query.get('shot');
+const params = new URLSearchParams(location.search);
+const SEED = parseInt(params.get('seed') || '7', 10) || 7;
+const SHOT = params.get('shot');
 
 const canvas = document.getElementById('game');
 const g = canvas.getContext('2d');
 canvas.width = VIEW_W;
 canvas.height = VIEW_H;
 
-const sound = createSound();
-const city = generateCity(SEED);
+const audio = createAudio();
+const city = buildCity(SEED);
 
 const s = {
   city,
   mode: SHOT === 'title' ? 'title' : 'play',
   time: 0,
   cash: 120,
-  player: { x: 330, y: 372, heading: 0, vx: 0, vy: 0 },
+  player: { x: 322, y: 356, heading: 0, vx: 0, vy: 0 },
   onFoot: true,
   car: null,
-  traffic: spawnTraffic(city, SEED),
-  crowd: spawnCrowd(SEED),
-  police: newPolice(),
+  traffic: seedTraffic(city, SEED),
+  crowd: seedCrowd(SEED),
+  law: newLaw(),
   jobs: newJobs(),
-  cam: { cx: 600, cy: 500, zoom: 1 },
-  lastFine: 0,
+  cam: { x: 600, y: 480, zoom: 1 },
+  fine: 0,
   saveT: 0,
 };
 window.__nbh = s;
 
-// The red coupe waiting by the spawn corner — most players' first theft.
-const firstCar = makeVehicle(388, 386, 0, 'coupe', '#d64541');
-firstCar.parked = true;
-s.traffic.push(firstCar);
+// A red coupe idling by the spawn corner — most players' first theft.
+const starter = makeCar(384, 372, 0, 'coupe', '#d64541');
+starter.parked = true;
+s.traffic.push(starter);
 
-// --- save / restore -------------------------------------------------------
+// --- save / restore ----------------------------------------------------------
 function persist() {
   try {
-    localStorage.setItem('nbh2.save.v1', JSON.stringify({
+    localStorage.setItem('nbh2-save', JSON.stringify({
       cash: s.cash, done: s.jobs.done, banked: s.jobs.banked,
       px: Math.round(s.player.x), py: Math.round(s.player.y),
     }));
-  } catch { /* storage unavailable: play on without it */ }
+  } catch { /* storage blocked: the run just won't persist */ }
 }
 function restore() {
   try {
-    const d = JSON.parse(localStorage.getItem('nbh2.save.v1') || 'null');
+    const d = JSON.parse(localStorage.getItem('nbh2-save') || 'null');
     if (!d) return;
-    if (typeof d.cash === 'number') s.cash = d.cash;
-    if (typeof d.done === 'number') s.jobs.done = d.done;
-    if (typeof d.banked === 'number') s.jobs.banked = d.banked;
-    if (!SHOT && typeof d.px === 'number') { s.player.x = d.px; s.player.y = d.py; }
-  } catch { /* corrupted save: start fresh */ }
+    if (Number.isFinite(d.cash)) s.cash = d.cash;
+    if (Number.isFinite(d.done)) s.jobs.done = d.done;
+    if (Number.isFinite(d.banked)) s.jobs.banked = d.banked;
+    if (!SHOT && Number.isFinite(d.px)) { s.player.x = d.px; s.player.y = d.py; }
+  } catch { /* a broken save is no save */ }
 }
 restore();
 
-function focusPos() {
-  return s.onFoot ? s.player : s.car;
-}
-function focusVel() {
+function focus() { return s.onFoot ? s.player : s.car; }
+function focusMotion() {
   if (s.onFoot) return { vx: s.player.vx, vy: s.player.vy, speed: Math.hypot(s.player.vx, s.player.vy) };
-  return { vx: s.car.vx, vy: s.car.vy, speed: forwardSpeed(s.car) };
+  return { vx: s.car.vx, vy: s.car.vy, speed: speedAlong(s.car) };
 }
 
-// --- entering and leaving cars ---------------------------------------------
+// --- getting in and out of cars ----------------------------------------------
 function toggleCar() {
   if (!s.onFoot) {
     const car = s.car;
-    s.player.x = car.x + Math.cos(car.heading - Math.PI / 2) * 27;
-    s.player.y = car.y + Math.sin(car.heading - Math.PI / 2) * 27;
+    s.player.x = car.x + Math.cos(car.heading + Math.PI / 2) * 28;
+    s.player.y = car.y + Math.sin(car.heading + Math.PI / 2) * 28;
     s.player.heading = car.heading;
-    car.parked = true;      // abandoned where it stopped
+    car.parked = true;
     car.vx = 0; car.vy = 0;
     s.car = null;
     s.onFoot = true;
     return;
   }
-  let best = null, bestD = 66;
+  let best = null, bestD = 58;
   for (const c of s.traffic) {
     const d = Math.hypot(c.x - s.player.x, c.y - s.player.y);
     if (d < bestD) { bestD = d; best = c; }
@@ -101,47 +99,43 @@ function toggleCar() {
   s.car = best;
   s.onFoot = false;
   best.parked = false;
-  if (!best.taken) {
-    best.taken = true;
-    addHeat(s.police, best.speedAtTakeover > 40 ? 1.15 : 0.75);
+  if (!best.stolen) {
+    best.stolen = true;
+    addHeat(s.law, Math.abs(speedAlong(best)) > 30 ? 1.1 : 0.7);
     addMayhem(s.jobs, 6);
-    sound.thud();
+    audio.thud();
   }
 }
 
-// --- composed scenes for screenshots ----------------------------------------
-function composeShot(name) {
-  const p = s.player;
-  if (name === 'title') {
-    s.cam.cx = 900; s.cam.cy = 620; s.cam.zoom = 1;
-    return;
-  }
+// --- composed scenes for the screenshots ---------------------------------------
+function poseShot(name) {
+  if (name === 'title') { s.cam.x = 880; s.cam.y = 600; s.cam.zoom = 1; return; }
   if (name === 'city') {
-    p.x = 2520; p.y = 840;
-    s.cam.cx = 2470; s.cam.cy = 860; s.cam.zoom = 0.5;
+    s.player.x = 2380; s.player.y = 820;
+    s.cam.x = 2340; s.cam.y = 840; s.cam.zoom = 0.5;
     return;
   }
-  const car = firstCar;
+  // Chase and mission both put the player in the starter coupe on the
+  // east–west avenue at y = 650 (a road centreline), goal to the east.
+  const car = starter;
   car.parked = false;
-  car.taken = true;
+  car.stolen = true;
   s.car = car;
   s.onFoot = false;
-  // Keep the composed scene clean: no ambient traffic inside the frame.
-  s.traffic = s.traffic.filter((c) => c === car || Math.hypot(c.x - 1150, c.y - 1080) > 240);
+  s.traffic = s.traffic.filter((c) => c === car || Math.hypot(c.x - 1100, c.y - 650) > 260);
+  const cruiserAt = (x, y, vx) => {
+    const cop = makeCar(x, y, 0, 'cruiser', '#edf0f4');
+    cop.vx = vx;
+    cop.stolen = true;
+    return cop;
+  };
   if (name === 'chase') {
-    car.x = 1060; car.y = 1093; car.heading = 0; car.vx = 330; car.vy = 0;
-    s.police.stars = 4;
-    s.police.heat = 0.4;
-    const tails = [[945, 1062], [958, 1122], [882, 1094], [1022, 1046]];
-    for (const [x, y] of tails) {
-      s.police.fleet.push({
-        x, y, heading: 0, vx: 300, vy: 0, w: 39, l: 20,
-        type: 'cruiser', color: '#eef1f5', top: 470, accelMul: 1.05,
-        parked: false, taken: true, cop: true, cruise: 0, axis: null, honkT: 0, smashT: 0,
-      });
-    }
+    car.x = 1030; car.y = 667; car.heading = 0; car.vx = 335; car.vy = 0;
+    s.law.stars = 4;
+    s.law.heat = 0.4;
+    s.law.fleet = [cruiserAt(905, 632, 305), cruiserAt(918, 702, 305), cruiserAt(838, 667, 295), cruiserAt(985, 616, 315)];
     s.jobs.current = {
-      kind: 'DELIVER', stage: 'drop', goal: { x: 1380, y: 1080 },
+      kind: 'DELIVER', stage: 'drop', goal: { x: 1330, y: 650 },
       reward: 260, clock: 41, text: 'Drop the package off',
     };
     s.jobs.combo = 47; s.jobs.mult = 2; s.jobs.comboLeft = 3;
@@ -149,18 +143,11 @@ function composeShot(name) {
     s.cam.zoom = 1.7;
   }
   if (name === 'mission') {
-    car.x = 1452; car.y = 1093; car.heading = 0; car.vx = 95; car.vy = 0;
-    s.police.stars = 2;
-    const tails = [[1305, 1062], [1352, 1122]];
-    for (const [x, y] of tails) {
-      s.police.fleet.push({
-        x, y, heading: 0, vx: 200, vy: 0, w: 39, l: 20,
-        type: 'cruiser', color: '#eef1f5', top: 445, accelMul: 1.05,
-        parked: false, taken: true, cop: true, cruise: 0, axis: null, honkT: 0, smashT: 0,
-      });
-    }
+    car.x = 1440; car.y = 667; car.heading = 0; car.vx = 105; car.vy = 0;
+    s.law.stars = 2;
+    s.law.fleet = [cruiserAt(1292, 632, 205), cruiserAt(1340, 702, 205)];
     s.jobs.current = {
-      kind: 'DELIVER', stage: 'drop', goal: { x: 1560, y: 1080 },
+      kind: 'DELIVER', stage: 'drop', goal: { x: 1565, y: 650 },
       reward: 260, clock: 23, text: 'Drop the package off',
     };
     s.jobs.combo = 18; s.jobs.mult = 1; s.jobs.comboLeft = 3;
@@ -168,86 +155,81 @@ function composeShot(name) {
     s.cam.zoom = 1.45;
   }
 }
-if (SHOT) composeShot(SHOT);
+if (SHOT) poseShot(SHOT);
 
-// --- per-frame update ---------------------------------------------------------
+// --- update ---------------------------------------------------------------------
 function update(dt) {
   s.time += dt;
 
   if (s.mode === 'title') {
-    if (tapped('Enter')) { s.mode = 'play'; sound.unlock(); }
-    idleWorld(dt);
+    if (hitKey('Enter')) { s.mode = 'play'; audio.unlock(); }
+    idle(dt);
     return;
   }
   if (s.mode === 'busted') {
-    if (tapped('Enter')) {
-      const fine = bustFine(s.police, s.cash);
-      s.cash -= fine;
-      s.lastFine = fine;
+    if (hitKey('Enter')) {
+      s.cash -= settleBust(s.law, s.cash);
       s.onFoot = true;
       s.car = null;
-      s.player.x = 330; s.player.y = 372;
+      s.player.x = 322; s.player.y = 356;
       s.mode = 'play';
       persist();
     }
     return;
   }
-  if (tapped('KeyP')) {
+  if (hitKey('KeyP')) {
     s.mode = s.mode === 'paused' ? 'play' : 'paused';
     if (s.mode === 'paused') persist();
   }
   if (s.mode === 'paused') return;
 
-  if (tapped('KeyE')) toggleCar();
+  if (hitKey('KeyE')) toggleCar();
 
-  // Movement.
   if (s.onFoot) {
     let mx = 0, my = 0;
-    if (down('KeyW', 'ArrowUp')) my -= 1;
-    if (down('KeyS', 'ArrowDown')) my += 1;
-    if (down('KeyA', 'ArrowLeft')) mx -= 1;
-    if (down('KeyD', 'ArrowRight')) mx += 1;
-    const len = Math.hypot(mx, my) || 1;
-    const sp = FOOT.speed * (down('ShiftLeft', 'ShiftRight') ? FOOT.sprintMul : 1);
-    s.player.vx = (mx / len) * sp * (mx || my ? 1 : 0);
-    s.player.vy = (my / len) * sp * (mx || my ? 1 : 0);
+    if (heldKey('KeyW', 'ArrowUp')) my -= 1;
+    if (heldKey('KeyS', 'ArrowDown')) my += 1;
+    if (heldKey('KeyA', 'ArrowLeft')) mx -= 1;
+    if (heldKey('KeyD', 'ArrowRight')) mx += 1;
+    const len = Math.hypot(mx, my);
+    const sp = WALK.speed * (heldKey('ShiftLeft', 'ShiftRight') ? WALK.sprint : 1);
+    s.player.vx = len ? (mx / len) * sp : 0;
+    s.player.vy = len ? (my / len) * sp : 0;
     s.player.x += s.player.vx * dt;
     s.player.y += s.player.vy * dt;
-    if (mx || my) s.player.heading = Math.atan2(my, mx);
+    if (len) s.player.heading = Math.atan2(my, mx);
     s.player.x = Math.max(14, Math.min(WORLD_W - 14, s.player.x));
     s.player.y = Math.max(14, Math.min(WORLD_H - 14, s.player.y));
-    resolveBuildingHit(city, s.player, FOOT.radius);
+    pushOutOfBuildings(city, s.player, WALK.radius);
   } else {
-    const throttle = down('KeyW', 'ArrowUp') ? 1 : down('KeyS', 'ArrowDown') ? -1 : 0;
-    const steer = down('KeyA', 'ArrowLeft') ? -1 : down('KeyD', 'ArrowRight') ? 1 : 0;
-    stepVehicle(s.car, dt, throttle, steer, city);
-    // A big slide at speed is mayhem, and the combo loves it.
+    const throttle = heldKey('KeyW', 'ArrowUp') ? 1 : heldKey('KeyS', 'ArrowDown') ? -1 : 0;
+    const steer = heldKey('KeyA', 'ArrowLeft') ? -1 : heldKey('KeyD', 'ArrowRight') ? 1 : 0;
+    driveCar(s.car, dt, throttle, steer, city);
+    // Long slides at speed are mayhem.
     const fx = Math.cos(s.car.heading), fy = Math.sin(s.car.heading);
     const lat = Math.abs(s.car.vx * -fy + s.car.vy * fx);
-    const fwd = forwardSpeed(s.car);
-    if (lat > 95 && fwd > 215) addMayhem(s.jobs, dt * 8);
+    if (lat > 92 && Math.abs(speedAlong(s.car)) > 210) addMayhem(s.jobs, dt * 8);
   }
 
-  const pos = focusPos();
-  const vel = focusVel();
+  const at = focus();
+  const motion = focusMotion();
+  const world = { traffic: s.traffic, cops: s.law.fleet, playerCar: s.car };
 
-  // Traffic lives its own life; note each car's speed for theft heat.
-  const world = { cars: s.traffic, cops: s.police.fleet, playerCar: s.car, onFoot: s.onFoot, player: s.player };
   for (const c of s.traffic) {
-    c.speedAtTakeover = Math.abs(forwardSpeed(c));
-    if (c !== s.car) driveTraffic(c, dt, city, world);
+    if (c !== s.car) stepTraffic(c, dt, city, world, Math.random);
+    if (c.hitCd > 0) c.hitCd -= dt;
+    if (c.nearMissCd > 0) c.nearMissCd -= dt;
   }
 
-  // Shunts: the player's car against everything else.
+  // Player-car shunts and near misses.
   if (!s.onFoot) {
-    const others = [...s.traffic.filter((c) => c !== s.car), ...s.police.fleet];
-    for (const o of others) {
-      const hit = overlap(s.car, o);
+    const rivals = [...s.traffic.filter((c) => c !== s.car), ...s.law.fleet];
+    for (const o of rivals) {
+      const hit = carOverlap(s.car, o);
       if (!hit) {
-        // Near miss at speed pays a little mayhem, once per car per while.
-        if ((o.nearT || 0) <= 0 && Math.abs(vel.speed) > 235) {
+        if (o.nearMissCd <= 0 && Math.abs(motion.speed) > 230) {
           const d = Math.hypot(o.x - s.car.x, o.y - s.car.y);
-          if (d > 34 && d < 52) { addMayhem(s.jobs, 5); o.nearT = 2.5; }
+          if (d > 36 && d < 54) { addMayhem(s.jobs, 5); o.nearMissCd = 2.5; }
         }
         continue;
       }
@@ -255,119 +237,107 @@ function update(dt) {
       o.y += hit.ny * hit.depth * 0.6;
       s.car.x -= hit.nx * hit.depth * 0.4;
       s.car.y -= hit.ny * hit.depth * 0.4;
-      if (Math.abs(vel.speed) > 95 && (o.smashT || 0) <= 0) {
-        o.smashT = 1.2;
+      if (Math.abs(motion.speed) > 92 && o.hitCd <= 0) {
+        o.hitCd = 1.1;
         o.vx = s.car.vx * 0.35; o.vy = s.car.vy * 0.35;
         s.car.vx *= 0.55; s.car.vy *= 0.55;
         addMayhem(s.jobs, o.cop ? 18 : 12);
-        addHeat(s.police, o.cop ? 0.8 : 0.5);
-        sound.thud();
+        addHeat(s.law, o.cop ? 0.8 : 0.5);
+        audio.thud();
       }
     }
   }
-  for (const c of s.traffic) if ((c.nearT || 0) > 0) c.nearT -= dt;
 
-  // The crowd, and what happens when a fast car meets it.
+  // Crowd: scares from the player's driving feed the combo; contact is worse.
   const threats = [];
   for (const c of s.traffic) {
-    const sp = Math.abs(forwardSpeed(c));
-    if (sp > 128) threats.push({ x: c.x, y: c.y, speed: sp });
+    const sp = Math.abs(speedAlong(c));
+    if (sp > 125) threats.push({ x: c.x, y: c.y, speed: sp });
   }
-  if (!s.onFoot) {
-    const sp = Math.abs(vel.speed);
-    if (sp > 128) threats.push({ x: s.car.x, y: s.car.y, speed: sp });
-  }
+  if (!s.onFoot && Math.abs(motion.speed) > 125) threats.push({ x: s.car.x, y: s.car.y, speed: Math.abs(motion.speed) });
   stepCrowd(s.crowd, dt, city, threats, (ped) => {
-    // Only scares the player causes count toward the player's combo.
     if (!s.onFoot && Math.hypot(ped.x - s.car.x, ped.y - s.car.y) < 175) {
       addMayhem(s.jobs, 4);
-      if (Math.random() < 0.4) sound.horn();
+      if (Math.random() < 0.35) audio.horn();
     }
   });
-  if (!s.onFoot && Math.abs(vel.speed) > 110) {
+  if (!s.onFoot && Math.abs(motion.speed) > 108) {
     for (const p of s.crowd) {
       if (p.downT <= 0 && Math.hypot(p.x - s.car.x, p.y - s.car.y) < 21) {
         p.downT = 3;
         addMayhem(s.jobs, 15);
-        addHeat(s.police, 1.25);
-        sound.thud();
+        addHeat(s.law, 1.25);
+        audio.thud();
       }
     }
   }
 
-  // Jobs.
-  stepJobs(s.jobs, dt, pos, s.police, (event, payload) => {
-    if (event === 'fetch') sound.grab();
-    if (event === 'done') { s.cash += payload.reward; sound.paid(); persist(); }
-    if (event === 'fail') sound.alarm();
-    if (event === 'combo-cash') { s.cash += payload.payout; sound.paid(); }
+  stepJobs(s.jobs, dt, at, s.law, (event, payload) => {
+    if (event === 'fetch') audio.grab();
+    if (event === 'done') { s.cash += payload.reward; audio.paid(); persist(); }
+    if (event === 'fail') audio.alarm();
+    if (event === 'combo-cash') { s.cash += payload.payout; audio.paid(); }
   });
 
-  // The law.
-  const starsBefore = s.police.stars;
-  stepPolice(s.police, dt, { x: pos.x, y: pos.y, vx: vel.vx, vy: vel.vy, speed: vel.speed }, city);
-  if (s.police.stars > starsBefore) sound.alarm();
-  if (s.police.busted && s.mode === 'play') {
-    s.lastFine = Math.min(s.cash, 140 + s.police.stars * 95);
+  const starsBefore = s.law.stars;
+  stepLaw(s.law, dt, { x: at.x, y: at.y, vx: motion.vx, vy: motion.vy, speed: motion.speed }, city);
+  if (s.law.stars > starsBefore) audio.alarm();
+  if (s.law.busted && s.mode === 'play') {
+    s.fine = Math.min(s.cash, 140 + s.law.stars * 95);
     s.mode = 'busted';
-    sound.bustedJingle();
+    audio.bustedJingle();
     persist();
   }
 
-  sound.engine(s.onFoot ? 0 : forwardSpeed(s.car) / s.car.top, !s.onFoot);
-  sound.siren(s.police.stars > 0 && s.police.fleet.length > 0, s.time);
+  audio.engine(s.onFoot ? 0 : speedAlong(s.car) / s.car.top, !s.onFoot);
+  audio.siren(s.law.stars > 0 && s.law.fleet.length > 0, s.time);
 
-  // Camera tracks the focus.
-  s.cam.cx = pos.x;
-  s.cam.cy = pos.y;
+  s.cam.x = at.x;
+  s.cam.y = at.y;
   s.cam.zoom = 1;
 
   s.saveT += dt;
   if (s.saveT > 5) { s.saveT = 0; persist(); }
 }
 
-// In shot and title modes the world idles: traffic rolls, crowds wander,
-// but no jobs tick and no heat builds — the composed scene stays composed.
-function idleWorld(dt) {
-  const world = { cars: s.traffic, cops: s.police.fleet, playerCar: s.car, onFoot: s.onFoot, player: s.player };
-  for (const c of s.traffic) if (c !== s.car) driveTraffic(c, dt, city, world);
+// Title and shot modes: the street keeps living, the posed actors hold.
+function idle(dt) {
+  const world = { traffic: s.traffic, cops: s.law.fleet, playerCar: s.car };
+  for (const c of s.traffic) if (c !== s.car) stepTraffic(c, dt, city, world, Math.random);
   stepCrowd(s.crowd, dt, city, [], null);
-  if (SHOT === 'city') { s.cam.cx = 2470; s.cam.cy = 860; s.cam.zoom = 0.5; }
-  if (SHOT === 'chase' || SHOT === 'mission') {
-    const pos = focusPos();
-    s.cam.cx = pos.x; s.cam.cy = pos.y;
-  }
-  if (SHOT === 'title') { s.cam.cx = 900; s.cam.cy = 620; s.cam.zoom = 1; }
+  if (SHOT === 'city') { s.cam.x = 2340; s.cam.y = 840; s.cam.zoom = 0.5; }
+  else if (SHOT === 'title') { s.cam.x = 880; s.cam.y = 600; s.cam.zoom = 1; }
+  else if (SHOT) { const at = focus(); s.cam.x = at.x; s.cam.y = at.y; }
 }
 
-// --- drawing ------------------------------------------------------------------
+// --- draw -----------------------------------------------------------------------
 function draw() {
   const vw = VIEW_W / s.cam.zoom;
   const vh = VIEW_H / s.cam.zoom;
-  const camRect = { x: s.cam.cx - vw / 2, y: s.cam.cy - vh / 2, w: vw, h: vh };
+  const view = { x: s.cam.x - vw / 2, y: s.cam.y - vh / 2, w: vw, h: vh };
   g.save();
   g.translate(VIEW_W / 2, VIEW_H / 2);
   g.scale(s.cam.zoom, s.cam.zoom);
-  g.translate(-s.cam.cx, -s.cam.cy);
+  g.translate(-s.cam.x, -s.cam.y);
 
-  paintWorld(g, city, camRect, s.time);
+  paintWorld(g, city, view, s.time);
   const job = s.jobs.current;
   if (job && s.mode !== 'title') {
     paintGoal(g, job.goal, job.stage === 'fetch' ? '#57e389' : '#ffd23f', job.kind, s.time);
   }
   for (const p of s.crowd) paintPed(g, p);
-  for (const c of s.traffic) if (c !== s.car) paintVehicle(g, c, s.time);
-  for (const cop of s.police.fleet) paintVehicle(g, cop, s.time);
-  if (!s.onFoot && s.car) paintVehicle(g, s.car, s.time);
+  for (const c of s.traffic) if (c !== s.car) paintCar(g, c, s.time);
+  for (const cop of s.law.fleet) paintCar(g, cop, s.time);
+  if (!s.onFoot && s.car) paintCar(g, s.car, s.time);
   if (s.onFoot) {
     const p = s.player;
     g.fillStyle = 'rgba(0,0,0,0.3)';
     g.beginPath(); g.ellipse(p.x + 2, p.y + 5, 9, 4, 0, 0, Math.PI * 2); g.fill();
-    g.fillStyle = '#ffd23f';
-    g.beginPath(); g.arc(p.x, p.y, FOOT.radius, 0, Math.PI * 2); g.fill();
-    g.fillStyle = '#24344d';
+    g.fillStyle = COL.playerBody;
+    g.beginPath(); g.arc(p.x, p.y, WALK.radius, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#22334e';
     g.beginPath(); g.arc(p.x, p.y - 2, 5.4, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = '#24344d';
+    g.strokeStyle = '#22334e';
     g.lineWidth = 3;
     g.beginPath();
     g.moveTo(p.x, p.y);
@@ -378,22 +348,20 @@ function draw() {
 
   if (s.mode === 'title') { paintTitle(g, s.time); return; }
   paintHud(g, s, s.time);
-  if (s.mode === 'busted') paintBusted(g, s.lastFine);
+  if (s.mode === 'busted') paintBusted(g, s.fine);
   if (s.mode === 'paused') paintPaused(g);
 }
 
-// --- boot ---------------------------------------------------------------------
-initKeyboard();
-let lastStamp = performance.now();
+// --- boot -------------------------------------------------------------------------
+bindKeyboard();
+let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.05, (now - lastStamp) / 1000);
-  lastStamp = now;
-  if (SHOT) { s.time += dt; idleWorld(dt); }
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (SHOT) { s.time += dt; idle(dt); }
   else update(dt);
   draw();
-  clearPresses();
+  frameDone();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-
-export { districtName };
